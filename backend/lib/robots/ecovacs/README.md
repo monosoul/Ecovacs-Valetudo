@@ -59,6 +59,15 @@ Behavior:
 
 If the stream dies, it reconnects in a loop and keeps the latest fresh pose in memory.
 
+`TopicStateSubscriber` keeps long-lived subscriptions to:
+
+- `/task/WorkState` (robot work lifecycle: idle/running/paused + worktype)
+- `/power/Battery`
+- `/power/ChargeState`
+
+These topic values are used to keep Valetudo status and battery attributes in sync,
+including reporting `docked` when the robot is on the charger.
+
 ### Local non-ROS commands
 
 `MdsctlClient` is used for:

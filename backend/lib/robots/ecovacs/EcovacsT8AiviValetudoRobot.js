@@ -17,6 +17,21 @@ const REMOTE_MOVE_STOP = 2;
 const REMOTE_TURN_W = 87;
 const SOUND_I_AM_HERE = 30;
 const SOUND_BEEP = 17;
+const WORK_STATE = {
+    IDLE: 0,
+    RUNNING: 1,
+    PAUSED: 2
+};
+const WORK_TYPE = {
+    AUTO_CLEAN: 0,
+    AREA_CLEAN: 1,
+    CUSTOM_CLEAN: 2,
+    RETURN: 5,
+    GOTO: 6,
+    IDLE: 7,
+    REMOTE_CONTROL: 9,
+    AUTO_COLLECT_DIRT: 13
+};
 
 class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
     /**
@@ -40,6 +55,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.detailedMapWorldMmPerPixel = implementationSpecificConfig.detailedMapWorldMmPerPixel ?? 50;
         this.livePositionPollIntervalMs = implementationSpecificConfig.livePositionPollIntervalMs ?? 1500;
         this.livePositionCommandTimeoutMs = implementationSpecificConfig.livePositionCommandTimeoutMs ?? 4000;
+        this.powerStatePollIntervalMs = implementationSpecificConfig.powerStatePollIntervalMs ?? 3000;
+        this.powerStateStaleAfterMs = implementationSpecificConfig.powerStateStaleAfterMs ?? 300_000;
+        this.workStateStaleAfterMs = implementationSpecificConfig.workStateStaleAfterMs ?? 20_000;
         this.tracePathEnabled = implementationSpecificConfig.tracePathEnabled ?? true;
         this.tracePointUnitMm = implementationSpecificConfig.tracePointUnitMm ?? 10;
         this.tracePathMaxPoints = implementationSpecificConfig.tracePathMaxPoints ?? 2000;
@@ -52,6 +70,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.cachedCompressedMapAt = 0;
         this.livePositionPollTimer = null;
         this.livePositionPollInFlight = false;
+        this.powerStatePollTimer = null;
         this.livePositionRefreshCounter = 0;
         this.tracePathPointsMm = [];
         this.lastTraceEndIdx = -1;
@@ -73,6 +92,10 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
 
         this.state.upsertFirstMatchingAttribute(new stateAttrs.DockStatusStateAttribute({
             value: stateAttrs.DockStatusStateAttribute.VALUE.IDLE
+        }));
+        this.state.upsertFirstMatchingAttribute(new stateAttrs.BatteryStateAttribute({
+            level: 0,
+            flag: stateAttrs.BatteryStateAttribute.FLAG.NONE
         }));
         this.setStatus(stateAttrs.StatusStateAttribute.VALUE.IDLE);
 
@@ -103,6 +126,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.livePositionPollTimer = setInterval(() => {
             void this.refreshLiveMapEntities();
         }, this.livePositionPollIntervalMs);
+        this.powerStatePollTimer = setInterval(() => {
+            this.refreshRuntimeState();
+        }, this.powerStatePollIntervalMs);
     }
 
     /**
@@ -443,6 +469,10 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         if (this.livePositionPollTimer) {
             clearInterval(this.livePositionPollTimer);
             this.livePositionPollTimer = null;
+        }
+        if (this.powerStatePollTimer) {
+            clearInterval(this.powerStatePollTimer);
+            this.powerStatePollTimer = null;
         }
 
         await this.rosFacade.shutdown();
@@ -837,6 +867,71 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             }
         } finally {
             this.livePositionPollInFlight = false;
+        }
+    }
+
+    refreshRuntimeState() {
+        try {
+            const workState = this.rosFacade.getRuntimeState(this.workStateStaleAfterMs)?.workState;
+            const powerState = this.rosFacade.getPowerState(this.powerStateStaleAfterMs);
+            const battery = powerState?.battery;
+            const chargeState = powerState?.chargeState;
+            let stateChanged = false;
+
+            if (battery && typeof battery.battery === "number") {
+                const level = clampInt(battery.battery, 0, 100);
+                const previous = this.state.getFirstMatchingAttributeByConstructor(stateAttrs.BatteryStateAttribute);
+                let flag = previous?.flag ?? stateAttrs.BatteryStateAttribute.FLAG.NONE;
+
+                if (chargeState && typeof chargeState.isOnCharger === "number") {
+                    if (Number(chargeState.isOnCharger) > 0) {
+                        if (chargeState.chargeState === 2 || level >= 100) {
+                            flag = stateAttrs.BatteryStateAttribute.FLAG.CHARGED;
+                        } else {
+                            flag = stateAttrs.BatteryStateAttribute.FLAG.CHARGING;
+                        }
+                    } else {
+                        flag = stateAttrs.BatteryStateAttribute.FLAG.DISCHARGING;
+                    }
+                }
+
+                this.state.upsertFirstMatchingAttribute(new stateAttrs.BatteryStateAttribute({
+                    level: level,
+                    flag: flag
+                }));
+                stateChanged = true;
+            }
+
+            if (!workState && !chargeState) {
+                if (stateChanged) {
+                    this.emitStateAttributesUpdated();
+                }
+                return;
+            }
+
+            const statusValue = determineRobotStatus(workState, chargeState);
+            const previousStatus = this.state.getFirstMatchingAttributeByConstructor(stateAttrs.StatusStateAttribute);
+            const previousStatusValue = previousStatus?.value;
+            if (previousStatusValue !== statusValue) {
+                Logger.debug(
+                    `Ecovacs runtime status transition: ${previousStatusValue ?? "unknown"} -> ${statusValue}` +
+                    ` (workState=${JSON.stringify(workState ?? null)}, chargeState=${JSON.stringify(chargeState ?? null)})`
+                );
+            }
+            this.state.upsertFirstMatchingAttribute(new stateAttrs.StatusStateAttribute({
+                value: statusValue,
+                flag: stateAttrs.StatusStateAttribute.FLAG.NONE
+            }));
+            this.state.upsertFirstMatchingAttribute(new stateAttrs.DockStatusStateAttribute({
+                value: statusToDockStatus(statusValue)
+            }));
+            stateChanged = true;
+
+            if (stateChanged) {
+                this.emitStateAttributesUpdated();
+            }
+        } catch (e) {
+            Logger.debug(`Ecovacs runtime state refresh failed: ${e?.message ?? e}`);
         }
     }
 
@@ -1630,6 +1725,55 @@ function clampInt(value, min, max) {
     }
 
     return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+/**
+ * @param {{worktype:number,state:number,workcause:number}|null|undefined} workState
+ * @param {{isOnCharger:number,chargeState:number}|null|undefined} chargeState
+ * @returns {string}
+ */
+function determineRobotStatus(workState, chargeState) {
+    const onCharger = Number(chargeState?.isOnCharger) > 0;
+
+    if (workState) {
+        if (workState.state === WORK_STATE.PAUSED) {
+            return stateAttrs.StatusStateAttribute.VALUE.PAUSED;
+        }
+        if (workState.state === WORK_STATE.RUNNING) {
+            if (workState.worktype === WORK_TYPE.RETURN) {
+                return stateAttrs.StatusStateAttribute.VALUE.RETURNING;
+            }
+            if (workState.worktype === WORK_TYPE.REMOTE_CONTROL) {
+                return stateAttrs.StatusStateAttribute.VALUE.MANUAL_CONTROL;
+            }
+            if (workState.worktype === WORK_TYPE.GOTO) {
+                return stateAttrs.StatusStateAttribute.VALUE.MOVING;
+            }
+
+            return stateAttrs.StatusStateAttribute.VALUE.CLEANING;
+        }
+    }
+
+    if (onCharger) {
+        return stateAttrs.StatusStateAttribute.VALUE.DOCKED;
+    }
+
+    return stateAttrs.StatusStateAttribute.VALUE.IDLE;
+}
+
+/**
+ * @param {string} statusValue
+ * @returns {string}
+ */
+function statusToDockStatus(statusValue) {
+    if (statusValue === stateAttrs.StatusStateAttribute.VALUE.CLEANING) {
+        return stateAttrs.DockStatusStateAttribute.VALUE.CLEANING;
+    }
+    if (statusValue === stateAttrs.StatusStateAttribute.VALUE.PAUSED) {
+        return stateAttrs.DockStatusStateAttribute.VALUE.PAUSE;
+    }
+
+    return stateAttrs.DockStatusStateAttribute.VALUE.IDLE;
 }
 
 /**

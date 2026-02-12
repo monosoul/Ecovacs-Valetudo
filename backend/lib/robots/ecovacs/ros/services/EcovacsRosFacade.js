@@ -5,6 +5,12 @@ const Logger = require("../../../../Logger");
 const PersistentServiceClient = require("../core/PersistentServiceClient");
 const PredictionPoseSubscriber = require("../core/PredictionPoseSubscriber");
 const RosMasterXmlRpcClient = require("../core/RosMasterXmlRpcClient");
+const {
+    TopicStateSubscriber,
+    decodePowerBattery,
+    decodePowerChargeState,
+    decodeTaskWorkState
+} = require("../core/TopicStateSubscriber");
 
 const SERVICES = {
     map: {
@@ -171,14 +177,53 @@ class EcovacsRosFacade {
             readTimeoutMs: options.callTimeoutMs,
             onWarn: options.onWarn
         });
+        this.batterySubscriber = new TopicStateSubscriber({
+            masterClient: this.masterClient,
+            callerId: this.callerId,
+            topic: "/power/Battery",
+            type: "power/Battery",
+            md5: "1f868bac590fa9e653b61dc342b25421",
+            decoder: decodePowerBattery,
+            connectTimeoutMs: options.connectTimeoutMs,
+            readTimeoutMs: options.callTimeoutMs,
+            onWarn: options.onWarn
+        });
+        this.chargeStateSubscriber = new TopicStateSubscriber({
+            masterClient: this.masterClient,
+            callerId: this.callerId,
+            topic: "/power/ChargeState",
+            type: "power/ChargeState",
+            md5: "3f40efefe99d0b54d25afc2ed5523fc0",
+            decoder: decodePowerChargeState,
+            connectTimeoutMs: options.connectTimeoutMs,
+            readTimeoutMs: options.callTimeoutMs,
+            onWarn: options.onWarn
+        });
+        this.workStateSubscriber = new TopicStateSubscriber({
+            masterClient: this.masterClient,
+            callerId: this.callerId,
+            topic: "/task/WorkState",
+            type: "task/WorkState",
+            md5: "85234983b5d2c6828f53442a64052ae3",
+            decoder: decodeTaskWorkState,
+            connectTimeoutMs: options.connectTimeoutMs,
+            readTimeoutMs: options.callTimeoutMs,
+            onWarn: options.onWarn
+        });
     }
 
     async startup() {
         await this.poseSubscriber.start();
+        await this.batterySubscriber.start();
+        await this.chargeStateSubscriber.start();
+        await this.workStateSubscriber.start();
     }
 
     async shutdown() {
         await this.poseSubscriber.shutdown();
+        await this.batterySubscriber.shutdown();
+        await this.chargeStateSubscriber.shutdown();
+        await this.workStateSubscriber.shutdown();
         await this.mapClient.shutdown();
         await this.spotAreaClient.shutdown();
         await this.chargerClient.shutdown();
@@ -186,6 +231,29 @@ class EcovacsRosFacade {
         await this.virtualWallClient.shutdown();
         await this.workClient.shutdown();
         await this.settingClient.shutdown();
+    }
+
+    /**
+     * @param {number} staleMs
+     * @returns {{battery:{battery:number,isLowVoltageToPowerOff:number}|null,chargeState:{isOnCharger:number,chargeState:number}|null}}
+     */
+    getPowerState(staleMs) {
+        return {
+            battery: this.batterySubscriber.getLatestValue(staleMs),
+            chargeState: this.chargeStateSubscriber.getLatestValue(staleMs)
+        };
+    }
+
+    /**
+     * @param {number} staleMs
+     * @returns {{battery:{battery:number,isLowVoltageToPowerOff:number}|null,chargeState:{isOnCharger:number,chargeState:number}|null,workState:{worktype:number,state:number,workcause:number}|null}}
+     */
+    getRuntimeState(staleMs) {
+        return {
+            battery: this.batterySubscriber.getLatestValue(staleMs),
+            chargeState: this.chargeStateSubscriber.getLatestValue(staleMs),
+            workState: this.workStateSubscriber.getLatestValue(staleMs)
+        };
     }
 
     /**
