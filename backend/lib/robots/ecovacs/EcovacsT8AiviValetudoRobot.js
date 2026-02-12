@@ -175,6 +175,13 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 // Positions are optional for this first map integration step.
                 Logger.warn("Ecovacs map poll: positions unavailable", e?.message ?? e);
             }
+            let virtualWalls = [];
+            try {
+                virtualWalls = await this.rosFacade.getVirtualWalls(0);
+                Logger.debug(`Ecovacs map poll: virtual walls fetched (${virtualWalls.length})`);
+            } catch (e) {
+                Logger.warn("Ecovacs map poll: virtual walls unavailable", e?.message ?? e);
+            }
 
             this.updateRobotPoseFromPositions(positions);
             const robotPoseSnapshot = this.getCurrentRobotPoseOrNull();
@@ -182,7 +189,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             const simplifiedMap = this.buildMapFromRooms(
                 roomDump.rooms,
                 positions,
-                robotPoseSnapshot
+                robotPoseSnapshot,
+                undefined,
+                virtualWalls
             );
             const simplifiedWithDynamicEntities = rebuildEntitiesOnlyMap(
                 simplifiedMap,
@@ -218,7 +227,8 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                     roomDump.rooms,
                     positions,
                     robotPoseSnapshot,
-                    compressedMap
+                    compressedMap,
+                    virtualWalls
                 );
                 const detailedWithDynamicEntities = rebuildEntitiesOnlyMap(
                     detailedMap,
@@ -510,9 +520,10 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
      * @param {any} positions
      * @param {{x:number,y:number,angle:number}|null} robotPose
      * @param {object} [compressedMap]
+     * @param {Array<{vwid:number,type:number,dots:Array<[number,number]>}>} [virtualWalls]
      * @returns {import("../../entities/map/ValetudoMap")}
      */
-    buildMapFromRooms(rooms, positions, robotPose, compressedMap) {
+    buildMapFromRooms(rooms, positions, robotPose, compressedMap, virtualWalls) {
         const pixelSizeCm = compressedMap?.resolutionCm ?? this.mapPixelSizeCm;
         const parsedRooms = rooms.map(room => {
             const polygon = Array.isArray(room.polygon) ? room.polygon : [];
@@ -642,6 +653,14 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
 
         const mapWidthCm = mapWidthPx * pixelSizeCm;
         const mapHeightCm = mapHeightPx * pixelSizeCm;
+        const transform = {
+            type: "rooms",
+            marginCm: marginCm,
+            maxY: maxY,
+            minX: minX,
+            pixelSizeCm: pixelSizeCm
+        };
+        mapItems.push(...buildRestrictionEntities(transform, pixelSizeCm, virtualWalls));
 
         return new mapEntities.ValetudoMap({
             size: {
@@ -652,13 +671,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             layers: layers,
             entities: mapItems,
             metaData: {
-                ecovacsTransform: {
-                    type: "rooms",
-                    marginCm: marginCm,
-                    maxY: maxY,
-                    minX: minX,
-                    pixelSizeCm: pixelSizeCm
-                }
+                ecovacsTransform: transform
             }
         });
     }
@@ -671,9 +684,10 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
      * @param {any} positions
      * @param {{x:number,y:number,angle:number}|null} robotPose
      * @param {{width:number,height:number,resolutionCm:number,floorPixels:Array<[number,number]>,wallPixels:Array<[number,number]>}} compressedMap
+     * @param {Array<{vwid:number,type:number,dots:Array<[number,number]>}>} [virtualWalls]
      * @returns {import("../../entities/map/ValetudoMap")}
      */
-    buildDetailedMapAlignedToSimplified(rooms, positions, robotPose, compressedMap) {
+    buildDetailedMapAlignedToSimplified(rooms, positions, robotPose, compressedMap, virtualWalls) {
         const pixelSizeCm = Number(compressedMap.resolutionCm);
         if (!Number.isFinite(pixelSizeCm) || pixelSizeCm <= 0) {
             throw new Error("Invalid compressed map pixel size");
@@ -788,6 +802,14 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 }));
             }
         }
+        const transform = {
+            mapHeightPx: mapHeightPx,
+            mapWidthPx: mapWidthPx,
+            mmPerPixel: mmPerPixel,
+            rotationDegrees: mapRotation,
+            type: "script",
+        };
+        entities.push(...buildRestrictionEntities(transform, pixelSizeCm, virtualWalls));
 
         return new mapEntities.ValetudoMap({
             size: {
@@ -798,13 +820,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             layers: layers,
             entities: entities,
             metaData: {
-                ecovacsTransform: {
-                    mapHeightPx: mapHeightPx,
-                    mapWidthPx: mapWidthPx,
-                    mmPerPixel: mmPerPixel,
-                    rotationDegrees: mapRotation,
-                    type: "script",
-                }
+                ecovacsTransform: transform
             }
         });
     }
@@ -1905,6 +1921,41 @@ function mapCmToWorldMm(transform, mapXcm, mapYcm, pixelSizeCm) {
     }
 
     return null;
+}
+
+/**
+ * @param {any} transform
+ * @param {number} pixelSizeCm
+ * @param {Array<{vwid:number,type:number,dots:Array<[number,number]>}>} [virtualWalls]
+ * @returns {Array<any>}
+ */
+function buildRestrictionEntities(transform, pixelSizeCm, virtualWalls) {
+    /** @type {Array<any>} */
+    const entitiesOut = [];
+    for (const wall of (Array.isArray(virtualWalls) ? virtualWalls : [])) {
+        const pointsCm = (Array.isArray(wall.dots) ? wall.dots : []).map(dot => {
+            return worldMmToMapPointCm(transform, Number(dot?.[0]), Number(dot?.[1]), pixelSizeCm);
+        }).filter(Boolean);
+        if (pointsCm.length < 2) {
+            continue;
+        }
+        const flattened = pointsCm.flat();
+        if (pointsCm.length >= 3) {
+            entitiesOut.push(new mapEntities.PolygonMapEntity({
+                type: wall.type === 1 ?
+                    mapEntities.PolygonMapEntity.TYPE.NO_MOP_AREA :
+                    mapEntities.PolygonMapEntity.TYPE.NO_GO_AREA,
+                points: flattened
+            }));
+        } else {
+            entitiesOut.push(new mapEntities.LineMapEntity({
+                type: mapEntities.LineMapEntity.TYPE.VIRTUAL_WALL,
+                points: flattened
+            }));
+        }
+    }
+
+    return entitiesOut;
 }
 
 /**
