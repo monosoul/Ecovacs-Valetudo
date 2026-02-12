@@ -515,10 +515,21 @@ class EcovacsRosFacade {
      */
     async addVirtualWallRect(mapId, vwid, wallType, rect) {
         const [x1, y1, x2, y2] = rect;
+        return await this.addVirtualWallPoints(mapId, vwid, wallType, [[x1, y1], [x1, y2], [x2, y2], [x2, y1]]);
+    }
+
+    /**
+     * @param {number} mapId
+     * @param {number} vwid
+     * @param {number} wallType
+     * @param {Array<[number,number]>} dots
+     * @returns {Promise<number>}
+     */
+    async addVirtualWallPoints(mapId, vwid, wallType, dots) {
         const wall = {
             vwid: vwid,
             type: wallType,
-            dots: [[x1, y1], [x1, y2], [x2, y2], [x2, y1]]
+            dots: dots.map(dot => [Number(dot[0]), Number(dot[1])])
         };
         const response = await this.callVirtualWall({
             type: VIRTUAL_WALL_MANIPULATE_TYPE.ADD,

@@ -79,6 +79,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.tracePathPointsMm = [];
         this.lastTraceEndIdx = -1;
         this.lastTraceMapId = null;
+        this.activeMapId = 0;
         this.tracePathWarningShown = false;
         this.rosFacade = new EcovacsRosFacade({
             masterUri: implementationSpecificConfig.rosMasterUri,
@@ -124,6 +125,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.registerCapability(new capabilities.EcovacsCarpetModeControlCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsMapSegmentationCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsZoneCleaningCapability({robot: this}));
+        this.registerCapability(new capabilities.EcovacsCombinedVirtualRestrictionsCapability({robot: this}));
     }
 
     getManufacturer() {
@@ -161,6 +163,10 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         try {
             Logger.debug("Ecovacs map poll: fetching rooms");
             const roomDump = await this.rosFacade.getRooms(0);
+            if (Number.isInteger(roomDump?.header?.mapid)) {
+                this.activeMapId = roomDump.header.mapid >>> 0;
+            }
+            const mapId = this.getActiveMapId();
 
             if (!Array.isArray(roomDump.rooms) || roomDump.rooms.length === 0) {
                 throw new Error("No room polygons returned by ManipulateSpotArea");
@@ -169,7 +175,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
 
             let positions = undefined;
             try {
-                positions = await this.rosFacade.getPositions(0);
+                positions = await this.rosFacade.getPositions(mapId);
                 Logger.debug("Ecovacs map poll: positions fetched");
             } catch (e) {
                 // Positions are optional for this first map integration step.
@@ -177,7 +183,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             }
             let virtualWalls = [];
             try {
-                virtualWalls = await this.rosFacade.getVirtualWalls(0);
+                virtualWalls = await this.rosFacade.getVirtualWalls(mapId);
                 Logger.debug(`Ecovacs map poll: virtual walls fetched (${virtualWalls.length})`);
             } catch (e) {
                 Logger.warn("Ecovacs map poll: virtual walls unavailable", e?.message ?? e);
@@ -214,7 +220,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                     Logger.debug(`Ecovacs map poll: using cached compressed map (${cacheAgeMs}ms old)`);
                 } else {
                     Logger.debug("Ecovacs map poll: fetching compressed map");
-                    const compressedRaw = await this.rosFacade.getCompressedMap(0);
+                    const compressedRaw = await this.rosFacade.getCompressedMap(mapId);
                     Logger.debug("Ecovacs map poll: decoding compressed map submaps");
                     compressedMap = decodeCompressedMapResponse(compressedRaw);
                     this.cachedCompressedMap = compressedMap;
@@ -853,6 +859,13 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
     }
 
     /**
+     * @returns {number}
+     */
+    getActiveMapId() {
+        return Number.isInteger(this.activeMapId) ? (this.activeMapId >>> 0) : 0;
+    }
+
+    /**
      * @param {import("../../entities/core/ValetudoZone")} zone
      * @returns {[number,number,number,number]}
      */
@@ -878,6 +891,45 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
     }
 
     /**
+     * @param {{x:number,y:number}} point
+     * @returns {{x:number,y:number}}
+     */
+    mapPointToWorld(point) {
+        const transform = this.state?.map?.metaData?.ecovacsTransform;
+        const pixelSizeCm = Number(this.state?.map?.pixelSize ?? 0);
+        if (!transform || !Number.isFinite(pixelSizeCm) || pixelSizeCm <= 0) {
+            throw new Error("Map transform is not available for virtual restrictions");
+        }
+        const world = mapCmToWorldMm(transform, Number(point?.x), Number(point?.y), pixelSizeCm);
+        if (!world) {
+            throw new Error("Invalid map point for virtual restrictions");
+        }
+
+        return world;
+    }
+
+    /**
+     * @param {{x:number,y:number}} point
+     * @returns {{x:number,y:number}|null}
+     */
+    worldPointToMap(point) {
+        const transform = this.state?.map?.metaData?.ecovacsTransform;
+        const pixelSizeCm = Number(this.state?.map?.pixelSize ?? 0);
+        if (!transform || !Number.isFinite(pixelSizeCm) || pixelSizeCm <= 0) {
+            return null;
+        }
+        const mapped = worldMmToMapPointCm(transform, Number(point?.x), Number(point?.y), pixelSizeCm);
+        if (!mapped || mapped.length < 2) {
+            return null;
+        }
+
+        return {
+            x: mapped[0],
+            y: mapped[1]
+        };
+    }
+
+    /**
      * Refresh only robot/charger entities frequently, without rebuilding map layers.
      *
      * @returns {Promise<void>}
@@ -892,7 +944,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
 
         this.livePositionPollInFlight = true;
         try {
-            const positions = await this.rosFacade.getPositions(0);
+            const positions = await this.rosFacade.getPositions(this.getActiveMapId());
             this.updateRobotPoseFromPositions(positions);
             if (this.tracePathEnabled) {
                 try {
@@ -1098,7 +1150,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
      * @returns {Promise<void>}
      */
     async updateTracePathFromService() {
-        const trace = await this.rosFacade.getTraceLatest(0, this.traceTailEntries);
+        const trace = await this.rosFacade.getTraceLatest(this.getActiveMapId(), this.traceTailEntries);
         const traceMapId = Number(trace?.trace_mapid);
         const traceEndIdx = Number(trace?.trace_end_idx);
         const rawHex = String(trace?.trace_raw_hex ?? "");
@@ -1941,11 +1993,26 @@ function buildRestrictionEntities(transform, pixelSizeCm, virtualWalls) {
         }
         const flattened = pointsCm.flat();
         if (pointsCm.length >= 3) {
+            const xs = pointsCm.map(point => point[0]);
+            const ys = pointsCm.map(point => point[1]);
+            const minX = Math.min(...xs);
+            const maxX = Math.max(...xs);
+            const minY = Math.min(...ys);
+            const maxY = Math.max(...ys);
+            if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minY) || !Number.isFinite(maxY)) {
+                continue;
+            }
+            const normalizedRect = [
+                minX, minY,
+                maxX, minY,
+                maxX, maxY,
+                minX, maxY
+            ];
             entitiesOut.push(new mapEntities.PolygonMapEntity({
                 type: wall.type === 1 ?
                     mapEntities.PolygonMapEntity.TYPE.NO_MOP_AREA :
                     mapEntities.PolygonMapEntity.TYPE.NO_GO_AREA,
-                points: flattened
+                points: normalizedRect
             }));
         } else {
             entitiesOut.push(new mapEntities.LineMapEntity({
