@@ -63,7 +63,7 @@ class TopicStateSubscriber {
         if (this.latestValue === null) {
             return null;
         }
-        if (Date.now() - this.latestAt > staleAfterMs) {
+        if (Number.isFinite(staleAfterMs) && staleAfterMs >= 0 && Date.now() - this.latestAt > staleAfterMs) {
             return null;
         }
 
@@ -96,8 +96,8 @@ class TopicStateSubscriber {
                 await readHandshake(socket, this.readTimeoutMs);
 
                 while (this.running) {
-                    const payloadLength = (await socket.readExact(4, this.readTimeoutMs)).readUInt32LE(0);
-                    const payload = await socket.readExact(payloadLength, this.readTimeoutMs);
+                    const payloadLength = (await socket.readExact(4)).readUInt32LE(0);
+                    const payload = await socket.readExact(payloadLength);
                     const parsed = this.decoder(payload);
                     if (parsed !== null && parsed !== undefined) {
                         this.latestValue = parsed;

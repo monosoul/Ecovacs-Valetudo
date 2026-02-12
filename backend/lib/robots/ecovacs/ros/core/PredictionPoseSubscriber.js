@@ -55,7 +55,7 @@ class PredictionPoseSubscriber {
         if (!this.latestPose) {
             return null;
         }
-        if (Date.now() - this.latestPoseAt > staleAfterMs) {
+        if (Number.isFinite(staleAfterMs) && staleAfterMs >= 0 && Date.now() - this.latestPoseAt > staleAfterMs) {
             return null;
         }
 
@@ -84,8 +84,8 @@ class PredictionPoseSubscriber {
                 await readHandshake(socket, this.readTimeoutMs);
 
                 while (this.running) {
-                    const payloadLen = (await socket.readExact(4, this.readTimeoutMs)).readUInt32LE(0);
-                    const payload = await socket.readExact(payloadLen, this.readTimeoutMs);
+                    const payloadLen = (await socket.readExact(4)).readUInt32LE(0);
+                    const payload = await socket.readExact(payloadLen);
                     const decoded = selected.decoder(payload);
                     if (decoded) {
                         this.latestPose = {

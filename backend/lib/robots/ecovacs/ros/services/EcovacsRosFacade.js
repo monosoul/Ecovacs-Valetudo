@@ -387,11 +387,26 @@ class EcovacsRosFacade {
      * @returns {Promise<any>}
      */
     async getPositions(mapId, stalePoseMs) {
-        const chargerReq = Buffer.alloc(5);
-        chargerReq.writeUInt8(0, 0);
-        chargerReq.writeUInt32LE(mapId >>> 0, 1);
-        const chargerBody = await this.chargerClient.call(chargerReq);
-        const chargerPose = parseChargerResponse(chargerBody);
+        /** @type {{x:number,y:number,theta:number,source:string,docktype:number,result:number,valid?:number,error?:string}} */
+        let chargerPose;
+        try {
+            const chargerReq = Buffer.alloc(5);
+            chargerReq.writeUInt8(0, 0);
+            chargerReq.writeUInt32LE(mapId >>> 0, 1);
+            const chargerBody = await this.chargerClient.call(chargerReq);
+            chargerPose = parseChargerResponse(chargerBody);
+        } catch (e) {
+            chargerPose = {
+                source: "service:/map/ManipulateCharger",
+                valid: 0,
+                error: `charger pose unavailable: ${String(e?.message ?? e)}`,
+                x: 0,
+                y: 0,
+                theta: 0,
+                docktype: 0,
+                result: 1
+            };
+        }
         const robotPose = this.poseSubscriber.getLatestPose(stalePoseMs);
 
         return {

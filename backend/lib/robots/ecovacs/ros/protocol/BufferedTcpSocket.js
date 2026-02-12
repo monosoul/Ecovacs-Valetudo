@@ -105,19 +105,24 @@ class BufferedTcpSocket {
         }
 
         return await new Promise((resolve, reject) => {
-            const timer = setTimeout(() => {
+            const hasTimeout = Number.isFinite(timeoutMs) && timeoutMs >= 0;
+            const timer = hasTimeout ? setTimeout(() => {
                 this.pendingRead = null;
                 reject(new Error(`Read timeout after ${timeoutMs}ms`));
-            }, timeoutMs);
+            }, timeoutMs) : null;
 
             this.pendingRead = {
                 length: length,
                 resolve: (buffer) => {
-                    clearTimeout(timer);
+                    if (timer !== null) {
+                        clearTimeout(timer);
+                    }
                     resolve(buffer);
                 },
                 reject: (err) => {
-                    clearTimeout(timer);
+                    if (timer !== null) {
+                        clearTimeout(timer);
+                    }
                     reject(err);
                 }
             };

@@ -17,6 +17,7 @@ const REMOTE_MOVE_STOP = 2;
 const REMOTE_TURN_W = 87;
 const SOUND_I_AM_HERE = 30;
 const SOUND_BEEP = 17;
+const DEFAULT_RUNTIME_STATE_CACHE_PATH = "/tmp/valetudo_ecovacs_runtime_state.json";
 const WORK_STATE = {
     IDLE: 0,
     RUNNING: 1,
@@ -45,7 +46,6 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         const implementationSpecificConfig = options.config.get("robot")?.implementationSpecificConfig ?? {};
 
         this.mapPixelSizeCm = implementationSpecificConfig.mapPixelSizeCm ?? 5;
-        this.robotPoseStaleAfterMs = implementationSpecificConfig.robotPoseStaleAfterMs ?? 10_000;
         this.detailedMapUpgradeEnabled = implementationSpecificConfig.detailedMapUpgradeEnabled ?? false;
         this.detailedMapMaxLayerPixels = implementationSpecificConfig.detailedMapMaxLayerPixels ?? 900_000;
         this.detailedMapMinFloorPixels = implementationSpecificConfig.detailedMapMinFloorPixels ?? 1_000;
@@ -58,6 +58,8 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.powerStatePollIntervalMs = implementationSpecificConfig.powerStatePollIntervalMs ?? 3000;
         this.powerStateStaleAfterMs = implementationSpecificConfig.powerStateStaleAfterMs ?? 300_000;
         this.workStateStaleAfterMs = implementationSpecificConfig.workStateStaleAfterMs ?? 20_000;
+        this.runtimeStateCachePath = implementationSpecificConfig.runtimeStateCachePath ?? DEFAULT_RUNTIME_STATE_CACHE_PATH;
+        this.runtimeStateCacheWriteMinIntervalMs = implementationSpecificConfig.runtimeStateCacheWriteMinIntervalMs ?? 5000;
         this.tracePathEnabled = implementationSpecificConfig.tracePathEnabled ?? true;
         this.tracePointUnitMm = implementationSpecificConfig.tracePointUnitMm ?? 10;
         this.tracePathMaxPoints = implementationSpecificConfig.tracePathMaxPoints ?? 2000;
@@ -65,12 +67,14 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.manualControlSessionCode = implementationSpecificConfig.manualControlSessionCode;
         this.manualControlActiveFlag = false;
         this.lastRobotPose = null;
-        this.lastRobotPoseAt = 0;
         this.cachedCompressedMap = null;
         this.cachedCompressedMapAt = 0;
         this.livePositionPollTimer = null;
         this.livePositionPollInFlight = false;
         this.powerStatePollTimer = null;
+        this.runtimeStateCache = this.loadRuntimeStateCache();
+        this.lastRuntimeStateCacheWriteAt = 0;
+        this.runtimeStateCacheWriteTimer = null;
         this.livePositionRefreshCounter = 0;
         this.tracePathPointsMm = [];
         this.lastTraceEndIdx = -1;
@@ -93,11 +97,26 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.state.upsertFirstMatchingAttribute(new stateAttrs.DockStatusStateAttribute({
             value: stateAttrs.DockStatusStateAttribute.VALUE.IDLE
         }));
+        const cachedBatteryLevel = Number(this.runtimeStateCache?.battery?.level);
+        const cachedBatteryFlag = this.runtimeStateCache?.battery?.flag;
+        const batteryLevel = Number.isFinite(cachedBatteryLevel) ? clampInt(cachedBatteryLevel, 0, 100) : 0;
+        const batteryFlag = Object.values(stateAttrs.BatteryStateAttribute.FLAG).includes(cachedBatteryFlag) ?
+            cachedBatteryFlag :
+            stateAttrs.BatteryStateAttribute.FLAG.NONE;
         this.state.upsertFirstMatchingAttribute(new stateAttrs.BatteryStateAttribute({
-            level: 0,
-            flag: stateAttrs.BatteryStateAttribute.FLAG.NONE
+            level: batteryLevel,
+            flag: batteryFlag
         }));
         this.setStatus(stateAttrs.StatusStateAttribute.VALUE.IDLE);
+
+        const cachedPose = this.runtimeStateCache?.robotPose;
+        if (cachedPose && Number.isFinite(cachedPose.x) && Number.isFinite(cachedPose.y)) {
+            this.lastRobotPose = {
+                x: Number(cachedPose.x),
+                y: Number(cachedPose.y),
+                angle: Number(cachedPose.angle ?? 0)
+            };
+        }
 
         this.registerCapability(new capabilities.EcovacsBasicControlCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsManualControlCapability({robot: this}));
@@ -148,7 +167,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
 
             let positions = undefined;
             try {
-                positions = await this.rosFacade.getPositions(0, this.robotPoseStaleAfterMs);
+                positions = await this.rosFacade.getPositions(0);
                 Logger.debug("Ecovacs map poll: positions fetched");
             } catch (e) {
                 // Positions are optional for this first map integration step.
@@ -474,6 +493,11 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             clearInterval(this.powerStatePollTimer);
             this.powerStatePollTimer = null;
         }
+        if (this.runtimeStateCacheWriteTimer) {
+            clearTimeout(this.runtimeStateCacheWriteTimer);
+            this.runtimeStateCacheWriteTimer = null;
+        }
+        this.flushRuntimeStateCache();
 
         await this.rosFacade.shutdown();
     }
@@ -795,7 +819,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 y: directPose.y,
                 angle: Number(directPose.theta ?? directPose.angle ?? 0)
             };
-            this.lastRobotPoseAt = Date.now();
+            this.updateRuntimeStateCache({
+                robotPose: this.lastRobotPose
+            });
             return;
         }
     }
@@ -805,14 +831,6 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
      * @returns {{x:number,y:number,angle:number}|null}
      */
     getCurrentRobotPoseOrNull() {
-        if (!this.lastRobotPose) {
-            return null;
-        }
-
-        if (Date.now() - this.lastRobotPoseAt > this.robotPoseStaleAfterMs) {
-            return null;
-        }
-
         return this.lastRobotPose;
     }
 
@@ -831,7 +849,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
 
         this.livePositionPollInFlight = true;
         try {
-            const positions = await this.rosFacade.getPositions(0, this.robotPoseStaleAfterMs);
+            const positions = await this.rosFacade.getPositions(0);
             this.updateRobotPoseFromPositions(positions);
             if (this.tracePathEnabled) {
                 try {
@@ -872,8 +890,8 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
 
     refreshRuntimeState() {
         try {
-            const workState = this.rosFacade.getRuntimeState(this.workStateStaleAfterMs)?.workState;
-            const powerState = this.rosFacade.getPowerState(this.powerStateStaleAfterMs);
+            const workState = this.rosFacade.getRuntimeState()?.workState;
+            const powerState = this.rosFacade.getPowerState();
             const battery = powerState?.battery;
             const chargeState = powerState?.chargeState;
             let stateChanged = false;
@@ -899,6 +917,12 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                     level: level,
                     flag: flag
                 }));
+                this.updateRuntimeStateCache({
+                    battery: {
+                        level: level,
+                        flag: flag
+                    }
+                });
                 stateChanged = true;
             }
 
@@ -932,6 +956,98 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             }
         } catch (e) {
             Logger.debug(`Ecovacs runtime state refresh failed: ${e?.message ?? e}`);
+        }
+    }
+
+    /**
+     * @returns {{robotPose:{x:number,y:number,angle:number}|null,battery:{level:number,flag:string}|null}}
+     */
+    loadRuntimeStateCache() {
+        try {
+            if (!fs.existsSync(this.runtimeStateCachePath)) {
+                return {
+                    robotPose: null,
+                    battery: null
+                };
+            }
+            const parsed = JSON.parse(fs.readFileSync(this.runtimeStateCachePath, "utf8"));
+
+            return {
+                robotPose: parsed?.robotPose ?? null,
+                battery: parsed?.battery ?? null
+            };
+        } catch (e) {
+            Logger.debug(`Failed to read Ecovacs runtime cache: ${e?.message ?? e}`);
+
+            return {
+                robotPose: null,
+                battery: null
+            };
+        }
+    }
+
+    /**
+     * @param {{robotPose?:{x:number,y:number,angle:number},battery?:{level:number,flag:string}}} patch
+     */
+    updateRuntimeStateCache(patch) {
+        let changed = false;
+        if (patch.robotPose) {
+            const pose = {
+                x: Number(patch.robotPose.x),
+                y: Number(patch.robotPose.y),
+                angle: Number(patch.robotPose.angle ?? 0)
+            };
+            if (
+                !this.runtimeStateCache.robotPose ||
+                this.runtimeStateCache.robotPose.x !== pose.x ||
+                this.runtimeStateCache.robotPose.y !== pose.y ||
+                this.runtimeStateCache.robotPose.angle !== pose.angle
+            ) {
+                this.runtimeStateCache.robotPose = pose;
+                changed = true;
+            }
+        }
+        if (patch.battery) {
+            const battery = {
+                level: clampInt(Number(patch.battery.level), 0, 100),
+                flag: String(patch.battery.flag)
+            };
+            if (
+                !this.runtimeStateCache.battery ||
+                this.runtimeStateCache.battery.level !== battery.level ||
+                this.runtimeStateCache.battery.flag !== battery.flag
+            ) {
+                this.runtimeStateCache.battery = battery;
+                changed = true;
+            }
+        }
+        if (changed) {
+            this.scheduleRuntimeStateCacheWrite();
+        }
+    }
+
+    scheduleRuntimeStateCacheWrite() {
+        if (this.runtimeStateCacheWriteTimer) {
+            return;
+        }
+        const elapsed = Date.now() - this.lastRuntimeStateCacheWriteAt;
+        const delayMs = Math.max(0, this.runtimeStateCacheWriteMinIntervalMs - elapsed);
+        this.runtimeStateCacheWriteTimer = setTimeout(() => {
+            this.runtimeStateCacheWriteTimer = null;
+            this.flushRuntimeStateCache();
+        }, delayMs);
+    }
+
+    flushRuntimeStateCache() {
+        try {
+            fs.writeFileSync(
+                this.runtimeStateCachePath,
+                JSON.stringify(this.runtimeStateCache),
+                "utf8"
+            );
+            this.lastRuntimeStateCacheWriteAt = Date.now();
+        } catch (e) {
+            Logger.debug(`Failed to write Ecovacs runtime cache: ${e?.message ?? e}`);
         }
     }
 
@@ -1734,6 +1850,9 @@ function clampInt(value, min, max) {
  */
 function determineRobotStatus(workState, chargeState) {
     const onCharger = Number(chargeState?.isOnCharger) > 0;
+    if (onCharger) {
+        return stateAttrs.StatusStateAttribute.VALUE.DOCKED;
+    }
 
     if (workState) {
         if (workState.state === WORK_STATE.PAUSED) {
@@ -1752,10 +1871,6 @@ function determineRobotStatus(workState, chargeState) {
 
             return stateAttrs.StatusStateAttribute.VALUE.CLEANING;
         }
-    }
-
-    if (onCharger) {
-        return stateAttrs.StatusStateAttribute.VALUE.DOCKED;
     }
 
     return stateAttrs.StatusStateAttribute.VALUE.IDLE;
