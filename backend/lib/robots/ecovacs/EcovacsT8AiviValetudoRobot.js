@@ -40,6 +40,10 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.detailedMapWorldMmPerPixel = implementationSpecificConfig.detailedMapWorldMmPerPixel ?? 50;
         this.livePositionPollIntervalMs = implementationSpecificConfig.livePositionPollIntervalMs ?? 1500;
         this.livePositionCommandTimeoutMs = implementationSpecificConfig.livePositionCommandTimeoutMs ?? 4000;
+        this.tracePathEnabled = implementationSpecificConfig.tracePathEnabled ?? true;
+        this.tracePointUnitMm = implementationSpecificConfig.tracePointUnitMm ?? 10;
+        this.tracePathMaxPoints = implementationSpecificConfig.tracePathMaxPoints ?? 2000;
+        this.traceTailEntries = implementationSpecificConfig.traceTailEntries ?? 1;
         this.manualControlSessionCode = implementationSpecificConfig.manualControlSessionCode;
         this.manualControlActiveFlag = false;
         this.lastRobotPose = null;
@@ -49,6 +53,10 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.livePositionPollTimer = null;
         this.livePositionPollInFlight = false;
         this.livePositionRefreshCounter = 0;
+        this.tracePathPointsMm = [];
+        this.lastTraceEndIdx = -1;
+        this.lastTraceMapId = null;
+        this.tracePathWarningShown = false;
 
         this.state.upsertFirstMatchingAttribute(new stateAttrs.DockStatusStateAttribute({
             value: stateAttrs.DockStatusStateAttribute.VALUE.IDLE
@@ -121,9 +129,15 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 positions,
                 robotPoseSnapshot
             );
-            Logger.info(`Ecovacs map poll: simplified map stats ${formatMapStats(simplifiedMap)}`);
+            const simplifiedWithDynamicEntities = rebuildEntitiesOnlyMap(
+                simplifiedMap,
+                positions,
+                robotPoseSnapshot,
+                this.tracePathPointsMm
+            ) ?? simplifiedMap;
+            Logger.info(`Ecovacs map poll: simplified map stats ${formatMapStats(simplifiedWithDynamicEntities)}`);
             Logger.debug(
-                `Ecovacs entities: simplified robot=${hasRobotEntity(simplifiedMap)} charger=${hasChargerEntity(simplifiedMap)}`
+                `Ecovacs entities: simplified robot=${hasRobotEntity(simplifiedWithDynamicEntities)} charger=${hasChargerEntity(simplifiedWithDynamicEntities)}`
             );
 
             // Publish only detailed map in normal flow.
@@ -155,13 +169,19 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                     robotPoseSnapshot,
                     compressedMap
                 );
+                const detailedWithDynamicEntities = rebuildEntitiesOnlyMap(
+                    detailedMap,
+                    positions,
+                    robotPoseSnapshot,
+                    this.tracePathPointsMm
+                ) ?? detailedMap;
                 const detailedPixels = getTotalLayerPixelCount(detailedMap);
-                const simpleFloorPixels = getLayerPixelCountByType(simplifiedMap, mapEntities.MapLayer.TYPE.FLOOR);
-                const detailedFloorPixels = getLayerPixelCountByType(detailedMap, mapEntities.MapLayer.TYPE.FLOOR);
+                const simpleFloorPixels = getLayerPixelCountByType(simplifiedWithDynamicEntities, mapEntities.MapLayer.TYPE.FLOOR);
+                const detailedFloorPixels = getLayerPixelCountByType(detailedWithDynamicEntities, mapEntities.MapLayer.TYPE.FLOOR);
                 const floorCoverageRatio = simpleFloorPixels > 0 ? (detailedFloorPixels / simpleFloorPixels) : 0;
-                Logger.info(`Ecovacs map poll: detailed map stats ${formatMapStats(detailedMap)}`);
+                Logger.info(`Ecovacs map poll: detailed map stats ${formatMapStats(detailedWithDynamicEntities)}`);
                 Logger.debug(
-                    `Ecovacs entities: detailed robot=${hasRobotEntity(detailedMap)} charger=${hasChargerEntity(detailedMap)}`
+                    `Ecovacs entities: detailed robot=${hasRobotEntity(detailedWithDynamicEntities)} charger=${hasChargerEntity(detailedWithDynamicEntities)}`
                 );
                 if (detailedPixels > this.detailedMapMaxLayerPixels) {
                     Logger.warn(
@@ -179,16 +199,16 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                     Logger.warn(
                         `Ecovacs map poll: detailed floor coverage too low (${floorCoverageRatio.toFixed(3)} < ${this.detailedMapMinFloorCoverageRatio}), using simplified fallback`
                     );
-                    this.state.map = simplifiedMap;
+                    this.state.map = simplifiedWithDynamicEntities;
                     this.emitMapUpdated();
                     return;
                 }
-                this.state.map = detailedMap;
+                this.state.map = detailedWithDynamicEntities;
                 this.emitMapUpdated();
                 Logger.info(`Ecovacs map poll: detailed map upgraded in ${Date.now() - detailedMapStart}ms`);
             } catch (e) {
                 Logger.warn("Ecovacs map poll: detailed map unavailable, using simplified fallback", e?.message ?? e);
-                this.state.map = simplifiedMap;
+                this.state.map = simplifiedWithDynamicEntities;
                 this.emitMapUpdated();
             } finally {
                 try {
@@ -748,10 +768,25 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             }
             const positions = parseFirstJSONObject(positionsOut.stdout);
             this.updateRobotPoseFromPositions(positions);
+            if (this.tracePathEnabled) {
+                try {
+                    await this.updateTracePathFromService();
+                } catch (e) {
+                    if (!this.tracePathWarningShown) {
+                        Logger.warn(
+                            "Ecovacs trace path disabled for now: trace-latest command failed. " +
+                            "Ensure latest /data/ros_map.py is deployed.",
+                            e?.message ?? e
+                        );
+                        this.tracePathWarningShown = true;
+                    }
+                }
+            }
             const updated = rebuildEntitiesOnlyMap(
                 this.state.map,
                 positions,
-                this.getCurrentRobotPoseOrNull()
+                this.getCurrentRobotPoseOrNull(),
+                this.tracePathPointsMm
             );
             if (updated) {
                 this.state.map = updated;
@@ -768,6 +803,49 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             }
         } finally {
             this.livePositionPollInFlight = false;
+        }
+    }
+
+    /**
+     * @returns {Promise<void>}
+     */
+    async updateTracePathFromService() {
+        const traceOut = await this.runMapCommandWithTimeout(
+            ["trace-latest", "--mapid", "0", "--tail", String(this.traceTailEntries)],
+            Math.min(this.scriptTimeoutMs, this.livePositionCommandTimeoutMs)
+        );
+        if (!traceOut.stdout) {
+            return;
+        }
+        const trace = parseFirstJSONObject(traceOut.stdout);
+        const traceMapId = Number(trace?.trace_mapid);
+        const traceEndIdx = Number(trace?.trace_end_idx);
+        const rawHex = String(trace?.trace_raw_hex ?? "");
+        if (!Number.isFinite(traceMapId) || !Number.isFinite(traceEndIdx) || rawHex.length === 0) {
+            return;
+        }
+
+        if (this.lastTraceMapId !== null && this.lastTraceMapId !== traceMapId) {
+            this.tracePathPointsMm = [];
+            this.lastTraceEndIdx = -1;
+        }
+        this.lastTraceMapId = traceMapId;
+
+        if (traceEndIdx <= this.lastTraceEndIdx) {
+            return;
+        }
+        this.lastTraceEndIdx = traceEndIdx;
+
+        const pointsMm = decodeTraceRawHexToWorldMmPoints(rawHex, this.tracePointUnitMm);
+        for (const point of pointsMm) {
+            const last = this.tracePathPointsMm.length > 0 ? this.tracePathPointsMm[this.tracePathPointsMm.length - 1] : null;
+            if (last && last.x === point.x && last.y === point.y) {
+                continue;
+            }
+            this.tracePathPointsMm.push(point);
+        }
+        if (this.tracePathPointsMm.length > this.tracePathMaxPoints) {
+            this.tracePathPointsMm = this.tracePathPointsMm.slice(this.tracePathPointsMm.length - this.tracePathMaxPoints);
         }
     }
 
@@ -1342,12 +1420,116 @@ function sleep(ms) {
 }
 
 /**
+ * Decode one ManipulateTrace raw hex chunk:
+ * [5B props+dict][4B usize32 LE][LZMA stream], uncompressed records: <int16 x><int16 y><u8 flag>
+ *
+ * @param {string} rawHex
+ * @param {number} unitMm
+ * @returns {Array<{x:number,y:number,flag:number}>}
+ */
+function decodeTraceRawHexToWorldMmPoints(rawHex, unitMm) {
+    const raw = Buffer.from(String(rawHex ?? ""), "hex");
+    if (raw.length < 10) {
+        return [];
+    }
+
+    const scale = Number(unitMm);
+    if (!Number.isFinite(scale) || scale <= 0) {
+        return [];
+    }
+
+    /** @type {Array<{x:number,y:number,flag:number}>} */
+    const points = [];
+    const decodedPrimary = tryDecodeSingleTraceChunk(raw);
+    if (decodedPrimary !== null) {
+        appendDecodedTracePoints(points, decodedPrimary, scale);
+        return points;
+    }
+
+    // Fallback for concatenated tail payloads: split by observed chunk signature.
+    const signature = Buffer.from([0x5d, 0x00, 0x00, 0x04, 0x00]);
+    const starts = [];
+    for (let i = 0; i <= raw.length - signature.length; i++) {
+        let match = true;
+        for (let j = 0; j < signature.length; j++) {
+            if (raw[i + j] !== signature[j]) {
+                match = false;
+                break;
+            }
+        }
+        if (match) {
+            starts.push(i);
+        }
+    }
+    if (starts.length === 0) {
+        return [];
+    }
+    starts.push(raw.length);
+    for (let i = 0; i + 1 < starts.length; i++) {
+        const chunk = raw.subarray(starts[i], starts[i + 1]);
+        const decoded = tryDecodeSingleTraceChunk(chunk);
+        if (decoded !== null) {
+            appendDecodedTracePoints(points, decoded, scale);
+        }
+    }
+
+    return points;
+}
+
+/**
+ * @param {Array<{x:number,y:number,flag:number}>} outPoints
+ * @param {Buffer} decoded
+ * @param {number} scale
+ */
+function appendDecodedTracePoints(outPoints, decoded, scale) {
+    for (let off = 0; off + 4 < decoded.length; off += 5) {
+        const x = decoded.readInt16LE(off);
+        const y = decoded.readInt16LE(off + 2);
+        const flag = decoded.readUInt8(off + 4);
+        outPoints.push({
+            x: x * scale,
+            y: y * scale,
+            flag: flag
+        });
+    }
+}
+
+/**
+ * @param {Buffer} raw
+ * @returns {Buffer|null}
+ */
+function tryDecodeSingleTraceChunk(raw) {
+    if (!Buffer.isBuffer(raw) || raw.length < 10) {
+        return null;
+    }
+    try {
+        const propsDict = raw.subarray(0, 5);
+        const usize32 = raw.readUInt32LE(5);
+        const lzmaPayload = raw.subarray(9);
+        const hdr = Buffer.alloc(13);
+        propsDict.copy(hdr, 0, 0, 5);
+        hdr.writeUInt32LE(usize32, 5);
+        hdr.writeUInt32LE(0, 9);
+        const outRaw = lzma.decompressFile(Buffer.concat([hdr, lzmaPayload]));
+        const out = outRaw instanceof Uint8Array ? Buffer.from(outRaw) : Buffer.from(outRaw ?? []);
+        if (out.length < 5) {
+            return null;
+        }
+
+        return out;
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
  * @param {import("../../entities/map/ValetudoMap")} currentMap
  * @param {any} positions
  * @param {{x:number,y:number,angle:number}|null} robotPose
+ * @param {Array<{x:number,y:number}>} [tracePathPointsMm]
  * @returns {import("../../entities/map/ValetudoMap")|null}
  */
-function rebuildEntitiesOnlyMap(currentMap, positions, robotPose) {
+function rebuildEntitiesOnlyMap(currentMap, positions, robotPose, tracePathPointsMm) {
     const transform = currentMap?.metaData?.ecovacsTransform;
     if (!transform) {
         return null;
@@ -1359,7 +1541,8 @@ function rebuildEntitiesOnlyMap(currentMap, positions, robotPose) {
 
     const staticEntities = Array.isArray(currentMap.entities) ? currentMap.entities.filter(entity => {
         return entity?.type !== mapEntities.PointMapEntity.TYPE.CHARGER_LOCATION &&
-            entity?.type !== mapEntities.PointMapEntity.TYPE.ROBOT_POSITION;
+            entity?.type !== mapEntities.PointMapEntity.TYPE.ROBOT_POSITION &&
+            entity?.type !== mapEntities.PathMapEntity.TYPE.PATH;
     }) : [];
     const dynamicEntities = [];
 
@@ -1383,6 +1566,21 @@ function rebuildEntitiesOnlyMap(currentMap, positions, robotPose) {
                 }
             }));
         }
+    }
+
+    const pathPointsCm = [];
+    for (const point of (Array.isArray(tracePathPointsMm) ? tracePathPointsMm : [])) {
+        const mapped = worldMmToMapPointCm(transform, Number(point.x), Number(point.y), pixelSizeCm);
+        if (!mapped) {
+            continue;
+        }
+        pathPointsCm.push(mapped[0], mapped[1]);
+    }
+    if (pathPointsCm.length >= 4) {
+        dynamicEntities.push(new mapEntities.PathMapEntity({
+            type: mapEntities.PathMapEntity.TYPE.PATH,
+            points: pathPointsCm
+        }));
     }
 
     if (dynamicEntities.length === 0) {
