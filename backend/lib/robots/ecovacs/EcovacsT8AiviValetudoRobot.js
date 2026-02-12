@@ -38,12 +38,17 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.detailedMapRefreshIntervalMs = implementationSpecificConfig.detailedMapRefreshIntervalMs ?? 120_000;
         this.detailedMapRotationDegrees = implementationSpecificConfig.detailedMapRotationDegrees ?? 270;
         this.detailedMapWorldMmPerPixel = implementationSpecificConfig.detailedMapWorldMmPerPixel ?? 50;
+        this.livePositionPollIntervalMs = implementationSpecificConfig.livePositionPollIntervalMs ?? 1500;
+        this.livePositionCommandTimeoutMs = implementationSpecificConfig.livePositionCommandTimeoutMs ?? 4000;
         this.manualControlSessionCode = implementationSpecificConfig.manualControlSessionCode;
         this.manualControlActiveFlag = false;
         this.lastRobotPose = null;
         this.lastRobotPoseAt = 0;
         this.cachedCompressedMap = null;
         this.cachedCompressedMapAt = 0;
+        this.livePositionPollTimer = null;
+        this.livePositionPollInFlight = false;
+        this.livePositionRefreshCounter = 0;
 
         this.state.upsertFirstMatchingAttribute(new stateAttrs.DockStatusStateAttribute({
             value: stateAttrs.DockStatusStateAttribute.VALUE.IDLE
@@ -73,6 +78,10 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         setTimeout(() => {
             this.pollMap();
         }, 2000);
+
+        this.livePositionPollTimer = setInterval(() => {
+            void this.refreshLiveMapEntities();
+        }, this.livePositionPollIntervalMs);
     }
 
     /**
@@ -97,25 +106,25 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
 
             let positions = undefined;
             try {
-                Logger.debug("Ecovacs map poll: fetching positions");
-                const positionsOut = await this.runMapCommand(["positions", "--mapid", "0"]);
-                if (positionsOut.stdout) {
-                    positions = parseFirstJSONObject(positionsOut.stdout);
-                    Logger.debug("Ecovacs map poll: positions fetched");
-                }
+                positions = await this.fetchPositionsWithRetry(3, 300);
+                Logger.debug("Ecovacs map poll: positions fetched");
             } catch (e) {
                 // Positions are optional for this first map integration step.
                 Logger.warn("Ecovacs map poll: positions unavailable", e?.message ?? e);
             }
 
             this.updateRobotPoseFromPositions(positions);
+            const robotPoseSnapshot = this.getCurrentRobotPoseOrNull();
 
             const simplifiedMap = this.buildMapFromRooms(
                 roomDump.rooms,
                 positions,
-                this.getCurrentRobotPoseOrNull()
+                robotPoseSnapshot
             );
             Logger.info(`Ecovacs map poll: simplified map stats ${formatMapStats(simplifiedMap)}`);
+            Logger.debug(
+                `Ecovacs entities: simplified robot=${hasRobotEntity(simplifiedMap)} charger=${hasChargerEntity(simplifiedMap)}`
+            );
 
             // Publish only detailed map in normal flow.
             const mapDumpDir = `/tmp/valetudo_ecovacs_map_${Date.now()}_${Math.round(Math.random() * 1e6)}`;
@@ -143,7 +152,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 const detailedMap = this.buildDetailedMapAlignedToSimplified(
                     roomDump.rooms,
                     positions,
-                    this.getCurrentRobotPoseOrNull(),
+                    robotPoseSnapshot,
                     compressedMap
                 );
                 const detailedPixels = getTotalLayerPixelCount(detailedMap);
@@ -151,6 +160,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 const detailedFloorPixels = getLayerPixelCountByType(detailedMap, mapEntities.MapLayer.TYPE.FLOOR);
                 const floorCoverageRatio = simpleFloorPixels > 0 ? (detailedFloorPixels / simpleFloorPixels) : 0;
                 Logger.info(`Ecovacs map poll: detailed map stats ${formatMapStats(detailedMap)}`);
+                Logger.debug(
+                    `Ecovacs entities: detailed robot=${hasRobotEntity(detailedMap)} charger=${hasChargerEntity(detailedMap)}`
+                );
                 if (detailedPixels > this.detailedMapMaxLayerPixels) {
                     Logger.warn(
                         `Ecovacs map poll: detailed map too large (${detailedPixels} px > ${this.detailedMapMaxLayerPixels} px), keeping simplified map`
@@ -264,6 +276,39 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         const commandEnv = Object.assign({}, process.env, envOverrides ?? {});
 
         return this.runCommand(this.pythonBinary, [scriptPath].concat(args), timeoutMs, commandEnv);
+    }
+
+    async shutdown() {
+        if (this.livePositionPollTimer) {
+            clearInterval(this.livePositionPollTimer);
+            this.livePositionPollTimer = null;
+        }
+    }
+
+    /**
+     * @private
+     * @param {number} attempts
+     * @param {number} delayMs
+     * @returns {Promise<any>}
+     */
+    async fetchPositionsWithRetry(attempts, delayMs) {
+        let last = undefined;
+
+        for (let i = 0; i < attempts; i++) {
+            const positionsOut = await this.runMapCommand(["positions", "--mapid", "0"]);
+            if (positionsOut.stdout) {
+                last = parseFirstJSONObject(positionsOut.stdout);
+                if (hasNumericRobotPose(last?.robot?.pose)) {
+                    return last;
+                }
+            }
+
+            if (i < attempts - 1) {
+                await sleep(delayMs);
+            }
+        }
+
+        return last;
     }
 
     /**
@@ -487,7 +532,16 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             },
             pixelSize: pixelSizeCm,
             layers: layers,
-            entities: mapItems
+            entities: mapItems,
+            metaData: {
+                ecovacsTransform: {
+                    type: "rooms",
+                    marginCm: marginCm,
+                    maxY: maxY,
+                    minX: minX,
+                    pixelSizeCm: pixelSizeCm
+                }
+            }
         });
     }
 
@@ -624,7 +678,16 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             },
             pixelSize: pixelSizeCm,
             layers: layers,
-            entities: entities
+            entities: entities,
+            metaData: {
+                ecovacsTransform: {
+                    mapHeightPx: mapHeightPx,
+                    mapWidthPx: mapWidthPx,
+                    mmPerPixel: mmPerPixel,
+                    rotationDegrees: mapRotation,
+                    type: "script",
+                }
+            }
         });
     }
 
@@ -659,6 +722,53 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         }
 
         return this.lastRobotPose;
+    }
+
+    /**
+     * Refresh only robot/charger entities frequently, without rebuilding map layers.
+     *
+     * @returns {Promise<void>}
+     */
+    async refreshLiveMapEntities() {
+        if (this.livePositionPollInFlight) {
+            return;
+        }
+        if (!this.state?.map || !Array.isArray(this.state.map.layers) || this.state.map.layers.length === 0) {
+            return;
+        }
+
+        this.livePositionPollInFlight = true;
+        try {
+            const positionsOut = await this.runMapCommandWithTimeout(
+                ["positions", "--mapid", "0"],
+                Math.min(this.scriptTimeoutMs, this.livePositionCommandTimeoutMs)
+            );
+            if (!positionsOut.stdout) {
+                return;
+            }
+            const positions = parseFirstJSONObject(positionsOut.stdout);
+            this.updateRobotPoseFromPositions(positions);
+            const updated = rebuildEntitiesOnlyMap(
+                this.state.map,
+                positions,
+                this.getCurrentRobotPoseOrNull()
+            );
+            if (updated) {
+                this.state.map = updated;
+                this.emitMapUpdated();
+                this.livePositionRefreshCounter++;
+                if (this.livePositionRefreshCounter % 20 === 0) {
+                    Logger.debug(`Ecovacs live entities refreshed (${this.livePositionRefreshCounter})`);
+                }
+            }
+        } catch (e) {
+            this.livePositionRefreshCounter++;
+            if (this.livePositionRefreshCounter % 20 === 0) {
+                Logger.debug(`Ecovacs live entity refresh skipped: ${e?.message ?? e}`);
+            }
+        } finally {
+            this.livePositionPollInFlight = false;
+        }
     }
 
     static IMPLEMENTATION_AUTO_DETECTION_HANDLER() {
@@ -1195,6 +1305,174 @@ function formatMapStats(map) {
     const payloadBytes = estimateMapPayloadBytes(map);
 
     return `size_cm=${widthCm}x${heightCm} pixel_cm=${pixelSize} layers=${layers.length} entities=${entitiesCount} layer_pixels=${totalPixels} payload_bytes=${payloadBytes} [${layerSummary}]`;
+}
+
+/**
+ * @param {any} pose
+ * @returns {boolean}
+ */
+function hasNumericRobotPose(pose) {
+    return Boolean(pose && typeof pose.x === "number" && typeof pose.y === "number");
+}
+
+/**
+ * @param {import("../../entities/map/ValetudoMap")} map
+ * @returns {boolean}
+ */
+function hasRobotEntity(map) {
+    return Array.isArray(map?.entities) && map.entities.some(entity => entity?.type === mapEntities.PointMapEntity.TYPE.ROBOT_POSITION);
+}
+
+/**
+ * @param {import("../../entities/map/ValetudoMap")} map
+ * @returns {boolean}
+ */
+function hasChargerEntity(map) {
+    return Array.isArray(map?.entities) && map.entities.some(entity => entity?.type === mapEntities.PointMapEntity.TYPE.CHARGER_LOCATION);
+}
+
+/**
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
+function sleep(ms) {
+    return new Promise(resolve => {
+        setTimeout(resolve, ms);
+    });
+}
+
+/**
+ * @param {import("../../entities/map/ValetudoMap")} currentMap
+ * @param {any} positions
+ * @param {{x:number,y:number,angle:number}|null} robotPose
+ * @returns {import("../../entities/map/ValetudoMap")|null}
+ */
+function rebuildEntitiesOnlyMap(currentMap, positions, robotPose) {
+    const transform = currentMap?.metaData?.ecovacsTransform;
+    if (!transform) {
+        return null;
+    }
+    const pixelSizeCm = Number(currentMap?.pixelSize ?? 0);
+    if (!Number.isFinite(pixelSizeCm) || pixelSizeCm <= 0) {
+        return null;
+    }
+
+    const staticEntities = Array.isArray(currentMap.entities) ? currentMap.entities.filter(entity => {
+        return entity?.type !== mapEntities.PointMapEntity.TYPE.CHARGER_LOCATION &&
+            entity?.type !== mapEntities.PointMapEntity.TYPE.ROBOT_POSITION;
+    }) : [];
+    const dynamicEntities = [];
+
+    const chargerPose = positions?.charger?.pose;
+    const chargerPoint = chargerPose ? worldMmToMapPointCm(transform, Number(chargerPose.x), Number(chargerPose.y), pixelSizeCm) : null;
+    if (chargerPoint) {
+        dynamicEntities.push(new mapEntities.PointMapEntity({
+            type: mapEntities.PointMapEntity.TYPE.CHARGER_LOCATION,
+            points: chargerPoint
+        }));
+    }
+
+    if (robotPose) {
+        const robotPoint = worldMmToMapPointCm(transform, Number(robotPose.x), Number(robotPose.y), pixelSizeCm);
+        if (robotPoint) {
+            dynamicEntities.push(new mapEntities.PointMapEntity({
+                type: mapEntities.PointMapEntity.TYPE.ROBOT_POSITION,
+                points: robotPoint,
+                metaData: {
+                    angle: Number.isFinite(robotPose.angle) ? robotPose.angle : 0
+                }
+            }));
+        }
+    }
+
+    if (dynamicEntities.length === 0) {
+        return null;
+    }
+    if (areEntitySetsEquivalent(currentMap.entities, staticEntities.concat(dynamicEntities))) {
+        return null;
+    }
+
+    return new mapEntities.ValetudoMap({
+        size: currentMap.size,
+        pixelSize: currentMap.pixelSize,
+        layers: currentMap.layers,
+        entities: staticEntities.concat(dynamicEntities),
+        metaData: currentMap.metaData
+    });
+}
+
+/**
+ * @param {any} transform
+ * @param {number} worldXmm
+ * @param {number} worldYmm
+ * @param {number} pixelSizeCm
+ * @returns {Array<number>|null}
+ */
+function worldMmToMapPointCm(transform, worldXmm, worldYmm, pixelSizeCm) {
+    if (!Number.isFinite(worldXmm) || !Number.isFinite(worldYmm)) {
+        return null;
+    }
+
+    if (transform.type === "rooms") {
+        const minX = Number(transform.minX);
+        const maxY = Number(transform.maxY);
+        const marginCm = Number(transform.marginCm);
+        if (!Number.isFinite(minX) || !Number.isFinite(maxY) || !Number.isFinite(marginCm)) {
+            return null;
+        }
+        const xCm = Math.round(worldXmm / 10);
+        const yCm = Math.round(worldYmm / 10);
+        const shiftedX = xCm - minX + marginCm;
+        const shiftedY = maxY - yCm + marginCm;
+        const gridX = Math.floor(shiftedX / pixelSizeCm);
+        const gridY = Math.floor(shiftedY / pixelSizeCm);
+
+        return [gridX * pixelSizeCm, gridY * pixelSizeCm];
+    }
+
+    if (transform.type === "script") {
+        const mapWidthPx = Number(transform.mapWidthPx);
+        const mapHeightPx = Number(transform.mapHeightPx);
+        const mmPerPixel = Number(transform.mmPerPixel);
+        if (!Number.isFinite(mapWidthPx) || !Number.isFinite(mapHeightPx) || !Number.isFinite(mmPerPixel) || mmPerPixel <= 0) {
+            return null;
+        }
+        const cx = mapWidthPx / 2.0;
+        const cy = mapHeightPx / 2.0;
+        const x = clampInt(Math.round(cx + (worldXmm / mmPerPixel)), 0, mapWidthPx - 1);
+        const y = clampInt(Math.round(cy - (worldYmm / mmPerPixel)), 0, mapHeightPx - 1);
+
+        return [x * pixelSizeCm, y * pixelSizeCm];
+    }
+
+    return null;
+}
+
+/**
+ * @param {number} value
+ * @param {number} min
+ * @param {number} max
+ * @returns {number}
+ */
+function clampInt(value, min, max) {
+    if (!Number.isFinite(value)) {
+        return min;
+    }
+
+    return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+/**
+ * @param {Array<any>} before
+ * @param {Array<any>} after
+ * @returns {boolean}
+ */
+function areEntitySetsEquivalent(before, after) {
+    try {
+        return JSON.stringify(before ?? []) === JSON.stringify(after ?? []);
+    } catch (e) {
+        return false;
+    }
 }
 
 /**
