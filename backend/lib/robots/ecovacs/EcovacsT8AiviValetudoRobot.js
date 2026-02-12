@@ -122,6 +122,8 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.registerCapability(new capabilities.EcovacsManualControlCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsLocateCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsCarpetModeControlCapability({robot: this}));
+        this.registerCapability(new capabilities.EcovacsMapSegmentationCapability({robot: this}));
+        this.registerCapability(new capabilities.EcovacsZoneCleaningCapability({robot: this}));
     }
 
     getManufacturer() {
@@ -832,6 +834,31 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
      */
     getCurrentRobotPoseOrNull() {
         return this.lastRobotPose;
+    }
+
+    /**
+     * @param {import("../../entities/core/ValetudoZone")} zone
+     * @returns {[number,number,number,number]}
+     */
+    mapZoneToWorldRect(zone) {
+        const transform = this.state?.map?.metaData?.ecovacsTransform;
+        const pixelSizeCm = Number(this.state?.map?.pixelSize ?? 0);
+        if (!transform || !Number.isFinite(pixelSizeCm) || pixelSizeCm <= 0) {
+            throw new Error("Map transform is not available for custom area cleaning");
+        }
+        const points = [zone.points?.pA, zone.points?.pB, zone.points?.pC, zone.points?.pD]
+            .filter(Boolean)
+            .map(point => {
+                return mapCmToWorldMm(transform, Number(point.x), Number(point.y), pixelSizeCm);
+            })
+            .filter(Boolean);
+        if (points.length === 0) {
+            throw new Error("Invalid zone points");
+        }
+        const xs = points.map(point => point.x);
+        const ys = points.map(point => point.y);
+
+        return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
     }
 
     /**
@@ -1824,6 +1851,57 @@ function worldMmToMapPointCm(transform, worldXmm, worldYmm, pixelSizeCm) {
         const y = clampInt(Math.round(cy - (worldYmm / mmPerPixel)), 0, mapHeightPx - 1);
 
         return [x * pixelSizeCm, y * pixelSizeCm];
+    }
+
+    return null;
+}
+
+/**
+ * @param {any} transform
+ * @param {number} mapXcm
+ * @param {number} mapYcm
+ * @param {number} pixelSizeCm
+ * @returns {{x:number,y:number}|null}
+ */
+function mapCmToWorldMm(transform, mapXcm, mapYcm, pixelSizeCm) {
+    if (!Number.isFinite(mapXcm) || !Number.isFinite(mapYcm) || !Number.isFinite(pixelSizeCm) || pixelSizeCm <= 0) {
+        return null;
+    }
+
+    if (transform.type === "rooms") {
+        const minX = Number(transform.minX);
+        const maxY = Number(transform.maxY);
+        const marginCm = Number(transform.marginCm);
+        if (!Number.isFinite(minX) || !Number.isFinite(maxY) || !Number.isFinite(marginCm)) {
+            return null;
+        }
+        const gridX = Math.round(mapXcm / pixelSizeCm);
+        const gridY = Math.round(mapYcm / pixelSizeCm);
+        const xCm = gridX * pixelSizeCm + minX - marginCm;
+        const yCm = maxY + marginCm - (gridY * pixelSizeCm);
+
+        return {
+            x: Math.round(xCm * 10),
+            y: Math.round(yCm * 10)
+        };
+    }
+
+    if (transform.type === "script") {
+        const mapWidthPx = Number(transform.mapWidthPx);
+        const mapHeightPx = Number(transform.mapHeightPx);
+        const mmPerPixel = Number(transform.mmPerPixel);
+        if (!Number.isFinite(mapWidthPx) || !Number.isFinite(mapHeightPx) || !Number.isFinite(mmPerPixel) || mmPerPixel <= 0) {
+            return null;
+        }
+        const cx = mapWidthPx / 2.0;
+        const cy = mapHeightPx / 2.0;
+        const xPx = mapXcm / pixelSizeCm;
+        const yPx = mapYcm / pixelSizeCm;
+
+        return {
+            x: Math.round((xPx - cx) * mmPerPixel),
+            y: Math.round((cy - yPx) * mmPerPixel)
+        };
     }
 
     return null;
