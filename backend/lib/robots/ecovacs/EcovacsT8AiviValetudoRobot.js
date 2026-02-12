@@ -1,15 +1,22 @@
 const capabilities = require("./capabilities");
-const childProcess = require("child_process");
+const EcovacsRosFacade = require("./ros/services/EcovacsRosFacade");
 const entities = require("../../entities");
 const fs = require("fs");
 const Logger = require("../../Logger");
 const lzma = require("lzma-purejs");
 const mapEntities = require("../../entities/map");
-const path = require("path");
+const MdsctlClient = require("./ros/services/MdsctlClient");
 const ValetudoRobot = require("../../core/ValetudoRobot");
 require("./lzmaPurejsPkgIncludes");
 
 const stateAttrs = entities.state.attributes;
+const REMOTE_MOVE_MVA_CUSTOM = 9;
+const REMOTE_MOVE_FORWARD = 0;
+const REMOTE_MOVE_BACKWARD = 1;
+const REMOTE_MOVE_STOP = 2;
+const REMOTE_TURN_W = 87;
+const SOUND_I_AM_HERE = 30;
+const SOUND_BEEP = 17;
 
 class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
     /**
@@ -22,13 +29,6 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
 
         const implementationSpecificConfig = options.config.get("robot")?.implementationSpecificConfig ?? {};
 
-        this.pythonBinary = implementationSpecificConfig.pythonBinary ?? "python2";
-        this.scriptBasePath = implementationSpecificConfig.scriptBasePath ?? "/data";
-        this.startCleanScript = implementationSpecificConfig.startCleanScript ?? "ros_start_clean.py";
-        this.settingsScript = implementationSpecificConfig.settingsScript ?? "ros_settings.py";
-        this.soundScript = implementationSpecificConfig.soundScript ?? "ros_sound.py";
-        this.mapScript = implementationSpecificConfig.mapScript ?? "ros_map.py";
-        this.scriptTimeoutMs = implementationSpecificConfig.scriptTimeoutMs ?? 15_000;
         this.mapPixelSizeCm = implementationSpecificConfig.mapPixelSizeCm ?? 5;
         this.robotPoseStaleAfterMs = implementationSpecificConfig.robotPoseStaleAfterMs ?? 10_000;
         this.detailedMapUpgradeEnabled = implementationSpecificConfig.detailedMapUpgradeEnabled ?? false;
@@ -57,6 +57,19 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.lastTraceEndIdx = -1;
         this.lastTraceMapId = null;
         this.tracePathWarningShown = false;
+        this.rosFacade = new EcovacsRosFacade({
+            masterUri: implementationSpecificConfig.rosMasterUri,
+            callerId: implementationSpecificConfig.rosCallerId,
+            connectTimeoutMs: implementationSpecificConfig.rosConnectTimeoutMs ?? 4_000,
+            callTimeoutMs: implementationSpecificConfig.rosCallTimeoutMs ?? 6_000,
+            debug: implementationSpecificConfig.rosDebug ?? true,
+            onWarn: (msg, err) => Logger.debug(`Ecovacs ROS: ${msg}: ${err ?? ""}`)
+        });
+        this.mdsctlClient = new MdsctlClient({
+            binaryPath: implementationSpecificConfig.mdsctlBinaryPath,
+            socketPath: implementationSpecificConfig.mdsctlSocketPath,
+            timeoutMs: implementationSpecificConfig.mdsctlTimeoutMs ?? 2_000
+        });
 
         this.state.upsertFirstMatchingAttribute(new stateAttrs.DockStatusStateAttribute({
             value: stateAttrs.DockStatusStateAttribute.VALUE.IDLE
@@ -79,13 +92,13 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
 
     startup() {
         super.startup();
-
-        Logger.info(`Ecovacs script base path: ${this.scriptBasePath}`);
-        Logger.info(`Ecovacs python binary: ${this.pythonBinary}`);
+        Logger.info("Ecovacs ROS backend mode enabled");
 
         setTimeout(() => {
             this.pollMap();
         }, 2000);
+
+        void this.rosFacade.startup();
 
         this.livePositionPollTimer = setInterval(() => {
             void this.refreshLiveMapEntities();
@@ -96,25 +109,20 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
      * @returns {Promise<void>}
      */
     async executeMapPoll() {
-        const roomDumpPath = `/tmp/valetudo_ecovacs_rooms_${Date.now()}_${Math.round(Math.random() * 1e6)}.json`;
         const pollStartedAt = Date.now();
 
         try {
             Logger.debug("Ecovacs map poll: fetching rooms");
-            await this.runMapCommand(["rooms", "--mapid", "0"], {
-                ROS_SPOT_AREA_JSON_OUT: roomDumpPath
-            });
-            const roomDumpRaw = fs.readFileSync(roomDumpPath).toString();
-            const roomDump = JSON.parse(roomDumpRaw);
+            const roomDump = await this.rosFacade.getRooms(0);
 
             if (!Array.isArray(roomDump.rooms) || roomDump.rooms.length === 0) {
-                throw new Error("No room polygons returned by ros_map.py");
+                throw new Error("No room polygons returned by ManipulateSpotArea");
             }
             Logger.debug(`Ecovacs map poll: rooms fetched (${roomDump.rooms.length})`);
 
             let positions = undefined;
             try {
-                positions = await this.fetchPositionsWithRetry(3, 300);
+                positions = await this.rosFacade.getPositions(0, this.robotPoseStaleAfterMs);
                 Logger.debug("Ecovacs map poll: positions fetched");
             } catch (e) {
                 // Positions are optional for this first map integration step.
@@ -141,7 +149,6 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             );
 
             // Publish only detailed map in normal flow.
-            const mapDumpDir = `/tmp/valetudo_ecovacs_map_${Date.now()}_${Math.round(Math.random() * 1e6)}`;
             try {
                 const detailedMapStart = Date.now();
                 let compressedMap = this.cachedCompressedMap;
@@ -150,13 +157,10 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 if (cacheValid) {
                     Logger.debug(`Ecovacs map poll: using cached compressed map (${cacheAgeMs}ms old)`);
                 } else {
-                    Logger.debug("Ecovacs map poll: fetching compressed map dump");
-                    const getOut = await this.runMapCommandWithTimeout(
-                        ["get", "--mapid", "0", "--out-dir", mapDumpDir],
-                        Math.min(this.scriptTimeoutMs, 7_000)
-                    );
-                    Logger.debug("Ecovacs map poll: decoding compressed submaps");
-                    compressedMap = decodeCompressedMapDump(mapDumpDir, getOut.stdout);
+                    Logger.debug("Ecovacs map poll: fetching compressed map");
+                    const compressedRaw = await this.rosFacade.getCompressedMap(0);
+                    Logger.debug("Ecovacs map poll: decoding compressed map submaps");
+                    compressedMap = decodeCompressedMapResponse(compressedRaw);
                     this.cachedCompressedMap = compressedMap;
                     this.cachedCompressedMapAt = Date.now();
                     Logger.debug(
@@ -210,23 +214,12 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 Logger.warn("Ecovacs map poll: detailed map unavailable, using simplified fallback", e?.message ?? e);
                 this.state.map = simplifiedWithDynamicEntities;
                 this.emitMapUpdated();
-            } finally {
-                try {
-                    fs.rmSync(mapDumpDir, {recursive: true, force: true});
-                } catch (e) {
-                    // ignore temp dir cleanup errors
-                }
             }
         } catch (e) {
             Logger.warn("Failed to poll Ecovacs map", e);
             throw e;
         } finally {
             Logger.debug(`Ecovacs map poll: done in ${Date.now() - pollStartedAt}ms`);
-            try {
-                fs.unlinkSync(roomDumpPath);
-            } catch (e) {
-                // ignore temp file cleanup errors
-            }
         }
     }
 
@@ -253,7 +246,75 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
      * @returns {Promise<{stdout: string, stderr: string}>}
      */
     async runStartCleanCommand(args) {
-        return this.runPythonScript(this.startCleanScript, args);
+        const command = String(args?.[0] ?? "").toLowerCase();
+        Logger.info(`Ecovacs command start-clean: ${command} args=${JSON.stringify(args ?? [])}`);
+        let responseCode = null;
+        switch (command) {
+            case "start":
+                responseCode = await this.rosFacade.startAutoClean();
+                break;
+            case "stop":
+                responseCode = await this.rosFacade.stopCleaning();
+                break;
+            case "pause":
+                responseCode = await this.rosFacade.pauseCleaning();
+                break;
+            case "resume":
+                responseCode = await this.rosFacade.resumeCleaning();
+                break;
+            case "home":
+                responseCode = await this.rosFacade.returnToDock();
+                break;
+            case "empty":
+                responseCode = await this.rosFacade.autoCollectDirt();
+                break;
+            case "room":
+                responseCode = await this.rosFacade.startRoomClean(parseCsvUint8(String(args?.[1] ?? "")));
+                break;
+            case "custom":
+                responseCode = await this.rosFacade.startCustomClean(parseRectArgs(args.slice(1)));
+                break;
+            case "remote-forward":
+                responseCode = await this.rosFacade.remoteMove(REMOTE_MOVE_FORWARD);
+                break;
+            case "remote-backward":
+                responseCode = await this.rosFacade.remoteMove(REMOTE_MOVE_BACKWARD);
+                break;
+            case "remote-stop":
+                responseCode = await this.rosFacade.remoteMove(REMOTE_MOVE_STOP);
+                break;
+            case "remote-turn-left":
+                responseCode = await this.rosFacade.remoteMove(REMOTE_MOVE_MVA_CUSTOM, -REMOTE_TURN_W);
+                break;
+            case "remote-turn-right":
+                responseCode = await this.rosFacade.remoteMove(REMOTE_MOVE_MVA_CUSTOM, REMOTE_TURN_W);
+                break;
+            case "remote-session-open":
+                await this.remoteSessionOpen(String(args?.[1] ?? ""));
+                break;
+            case "remote-session-close":
+                await this.remoteSessionClose();
+                break;
+            case "remote-hold-forward":
+                await this.remoteHold(REMOTE_MOVE_FORWARD, 0, Number(args?.[1] ?? 1.0));
+                break;
+            case "remote-hold-backward":
+                await this.remoteHold(REMOTE_MOVE_BACKWARD, 0, Number(args?.[1] ?? 1.0));
+                break;
+            case "remote-hold-turn-left":
+                await this.remoteHold(REMOTE_MOVE_MVA_CUSTOM, -REMOTE_TURN_W, Number(args?.[1] ?? 1.0));
+                break;
+            case "remote-hold-turn-right":
+                await this.remoteHold(REMOTE_MOVE_MVA_CUSTOM, REMOTE_TURN_W, Number(args?.[1] ?? 1.0));
+                break;
+            default:
+                throw new Error(`Unsupported start clean command: ${command}`);
+        }
+        if (responseCode !== null) {
+            Logger.info(`Ecovacs command result: ${command} response=${responseCode}`);
+        }
+
+        return {stdout: "", stderr: ""};
     }
 
     /**
@@ -261,7 +322,43 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
      * @returns {Promise<{stdout: string, stderr: string}>}
      */
     async runSettingsCommand(args) {
-        return this.runPythonScript(this.settingsScript, args);
+        const action = String(args?.[0] ?? "").toLowerCase();
+        const setting = String(args?.[1] ?? "").toLowerCase();
+        if (!["suction_boost_on_carpet", "carpet_boost", "room_preferences"].includes(setting)) {
+            throw new Error(`Unsupported setting command: ${action} ${setting}`);
+        }
+
+        if (action === "get") {
+            let value;
+            if (setting === "room_preferences") {
+                value = await this.rosFacade.getRoomPreferencesEnabled();
+            } else {
+                value = await this.rosFacade.getSuctionBoostOnCarpet();
+            }
+
+            return {
+                stdout: `${setting}: ${value}`,
+                stderr: ""
+            };
+        }
+        if (action === "set") {
+            const onOff = String(args?.[2] ?? "").toLowerCase();
+            if (!["on", "off"].includes(onOff)) {
+                throw new Error(`Invalid value for ${setting}: ${onOff}`);
+            }
+            if (setting === "room_preferences") {
+                await this.rosFacade.setRoomPreferencesEnabled(onOff);
+            } else {
+                await this.rosFacade.setSuctionBoostOnCarpet(onOff);
+            }
+
+            return {
+                stdout: `Set ${setting}: ${onOff}`,
+                stderr: ""
+            };
+        }
+
+        throw new Error(`Unsupported settings action: ${action}`);
     }
 
     /**
@@ -269,33 +366,77 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
      * @returns {Promise<{stdout: string, stderr: string}>}
      */
     async runSoundCommand(args) {
-        return this.runPythonScript(this.soundScript, args);
-    }
-
-    /**
-     * @param {Array<string>} args
-     * @param {object} [envOverrides]
-     * @returns {Promise<{stdout: string, stderr: string}>}
-     */
-    async runMapCommand(args, envOverrides) {
-        return this.runPythonScript(this.mapScript, args, envOverrides);
-    }
-
-    /**
-     * @param {Array<string>} args
-     * @param {number} timeoutMs
-     * @param {object} [envOverrides]
-     * @returns {Promise<{stdout: string, stderr: string}>}
-     */
-    async runMapCommandWithTimeout(args, timeoutMs, envOverrides) {
-        if (this.config.get("embedded") !== true) {
-            throw new Error("Ecovacs script execution is only supported in embedded mode.");
+        const command = String(args?.[0] ?? "").toLowerCase();
+        let fileNumber = null;
+        if (command === "locate") {
+            fileNumber = SOUND_I_AM_HERE;
+        } else if (command === "beep") {
+            fileNumber = SOUND_BEEP;
+        } else if (command === "play-sound") {
+            fileNumber = Number(args?.[1]);
+            if (!Number.isFinite(fileNumber)) {
+                throw new Error(`Invalid play-sound file number: ${args?.[1]}`);
+            }
+        } else {
+            throw new Error(`Unsupported sound command: ${command}`);
         }
 
-        const scriptPath = path.isAbsolute(this.mapScript) ? this.mapScript : path.join(this.scriptBasePath, this.mapScript);
-        const commandEnv = Object.assign({}, process.env, envOverrides ?? {});
+        await this.mdsctlClient.send("audio0", {
+            todo: "audio",
+            cmd: "play",
+            file_number: Math.trunc(fileNumber)
+        });
 
-        return this.runCommand(this.pythonBinary, [scriptPath].concat(args), timeoutMs, commandEnv);
+        return {stdout: "", stderr: ""};
+    }
+
+    /**
+     * @param {string} code
+     * @returns {Promise<void>}
+     */
+    async remoteSessionOpen(code) {
+        if (!code) {
+            throw new Error("remote-session-open requires a non-empty code");
+        }
+        await this.mdsctlClient.send("live_pwd", {
+            todo: "setPwdState",
+            state: 1
+        });
+        await this.mdsctlClient.send("live_pwd", {
+            todo: "onLiveLaunchPwdState",
+            state: 1,
+            password: String(code)
+        });
+        await this.mdsctlClient.send("rosnode", {
+            todo: "start_push_stream",
+            light_state: 1
+        });
+    }
+
+    /**
+     * @returns {Promise<void>}
+     */
+    async remoteSessionClose() {
+        await this.mdsctlClient.send("rosnode", {
+            todo: "stop_push_stream"
+        });
+    }
+
+    /**
+     * @param {number} moveType
+     * @param {number} w
+     * @param {number} durationSec
+     * @returns {Promise<void>}
+     */
+    async remoteHold(moveType, w, durationSec) {
+        const durationMs = Math.max(0, Number(durationSec) * 1000);
+        const intervalMs = 200;
+        const deadline = Date.now() + durationMs;
+        while (Date.now() < deadline) {
+            await this.rosFacade.remoteMove(moveType, w);
+            await delay(intervalMs);
+        }
+        await this.rosFacade.remoteMove(REMOTE_MOVE_STOP);
     }
 
     async shutdown() {
@@ -303,107 +444,8 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             clearInterval(this.livePositionPollTimer);
             this.livePositionPollTimer = null;
         }
-    }
 
-    /**
-     * @private
-     * @param {number} attempts
-     * @param {number} delayMs
-     * @returns {Promise<any>}
-     */
-    async fetchPositionsWithRetry(attempts, delayMs) {
-        let last = undefined;
-
-        for (let i = 0; i < attempts; i++) {
-            const positionsOut = await this.runMapCommand(["positions", "--mapid", "0"]);
-            if (positionsOut.stdout) {
-                last = parseFirstJSONObject(positionsOut.stdout);
-                if (hasNumericRobotPose(last?.robot?.pose)) {
-                    return last;
-                }
-            }
-
-            if (i < attempts - 1) {
-                await sleep(delayMs);
-            }
-        }
-
-        return last;
-    }
-
-    /**
-     * @private
-     * @param {string} scriptName
-     * @param {Array<string>} args
-     * @param {object} [envOverrides]
-     * @returns {Promise<{stdout: string, stderr: string}>}
-     */
-    async runPythonScript(scriptName, args, envOverrides) {
-        if (this.config.get("embedded") !== true) {
-            throw new Error("Ecovacs script execution is only supported in embedded mode.");
-        }
-
-        const scriptPath = path.isAbsolute(scriptName) ? scriptName : path.join(this.scriptBasePath, scriptName);
-        const commandEnv = Object.assign({}, process.env, envOverrides ?? {});
-
-        return this.runCommand(this.pythonBinary, [scriptPath].concat(args), this.scriptTimeoutMs, commandEnv);
-    }
-
-    /**
-     * @private
-     * @param {string} command
-     * @param {Array<string>} args
-     * @param {number} timeoutMs
-     * @param {object} [commandEnv]
-     * @returns {Promise<{stdout: string, stderr: string}>}
-     */
-    async runCommand(command, args, timeoutMs, commandEnv) {
-        return new Promise((resolve, reject) => {
-            const child = childProcess.spawn(command, args, {
-                env: commandEnv
-            });
-            let stdout = "";
-            let stderr = "";
-            let timedOut = false;
-
-            const timeout = setTimeout(() => {
-                timedOut = true;
-                child.kill("SIGKILL");
-            }, timeoutMs);
-
-            child.stdout.on("data", chunk => {
-                stdout += chunk.toString();
-            });
-            child.stderr.on("data", chunk => {
-                stderr += chunk.toString();
-            });
-
-            child.once("error", err => {
-                clearTimeout(timeout);
-                reject(err);
-            });
-
-            child.once("close", code => {
-                clearTimeout(timeout);
-
-                if (timedOut) {
-                    reject(new Error(`Command timed out after ${timeoutMs}ms: ${command} ${args.join(" ")}`));
-                    return;
-                }
-
-                if (code !== 0) {
-                    reject(new Error(
-                        `Command failed (exit ${code}): ${command} ${args.join(" ")}\nstdout:\n${stdout}\nstderr:\n${stderr}`
-                    ));
-                    return;
-                }
-
-                resolve({
-                    stdout: stdout.trim(),
-                    stderr: stderr.trim()
-                });
-            });
-        });
+        await this.rosFacade.shutdown();
     }
 
     /**
@@ -759,14 +801,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
 
         this.livePositionPollInFlight = true;
         try {
-            const positionsOut = await this.runMapCommandWithTimeout(
-                ["positions", "--mapid", "0"],
-                Math.min(this.scriptTimeoutMs, this.livePositionCommandTimeoutMs)
-            );
-            if (!positionsOut.stdout) {
-                return;
-            }
-            const positions = parseFirstJSONObject(positionsOut.stdout);
+            const positions = await this.rosFacade.getPositions(0, this.robotPoseStaleAfterMs);
             this.updateRobotPoseFromPositions(positions);
             if (this.tracePathEnabled) {
                 try {
@@ -774,8 +809,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 } catch (e) {
                     if (!this.tracePathWarningShown) {
                         Logger.warn(
-                            "Ecovacs trace path disabled for now: trace-latest command failed. " +
-                            "Ensure latest /data/ros_map.py is deployed.",
+                            "Ecovacs trace path disabled for now: ROS trace service call failed.",
                             e?.message ?? e
                         );
                         this.tracePathWarningShown = true;
@@ -810,14 +844,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
      * @returns {Promise<void>}
      */
     async updateTracePathFromService() {
-        const traceOut = await this.runMapCommandWithTimeout(
-            ["trace-latest", "--mapid", "0", "--tail", String(this.traceTailEntries)],
-            Math.min(this.scriptTimeoutMs, this.livePositionCommandTimeoutMs)
-        );
-        if (!traceOut.stdout) {
-            return;
-        }
-        const trace = parseFirstJSONObject(traceOut.stdout);
+        const trace = await this.rosFacade.getTraceLatest(0, this.traceTailEntries);
         const traceMapId = Number(trace?.trace_mapid);
         const traceEndIdx = Number(trace?.trace_end_idx);
         const rawHex = String(trace?.trace_raw_hex ?? "");
@@ -903,47 +930,66 @@ function pointInPolygon(x, y, polygon) {
     return inside;
 }
 
-module.exports = EcovacsT8AiviValetudoRobot;
-
 /**
- * Parse JSON and tolerate surrounding log noise.
- *
- * @param {string} text
- * @returns {any}
+ * @param {string} value
+ * @returns {Array<number>}
  */
-function parseFirstJSONObject(text) {
-    const raw = String(text ?? "").trim();
-    if (raw === "") {
-        throw new Error("Empty JSON string");
+function parseCsvUint8(value) {
+    const parts = String(value ?? "").split(",").map(item => item.trim()).filter(Boolean);
+    if (parts.length === 0) {
+        throw new Error("Expected at least one comma-separated uint8 value");
     }
 
-    try {
-        return JSON.parse(raw);
-    } catch (e) {
-        // Fallback for occasional trailing shell noise after JSON.
-        const firstBrace = raw.indexOf("{");
-        const lastBrace = raw.lastIndexOf("}");
-        if (firstBrace >= 0 && lastBrace > firstBrace) {
-            return JSON.parse(raw.slice(firstBrace, lastBrace + 1));
+    return parts.map(part => {
+        const parsed = Number(part);
+        if (!Number.isInteger(parsed) || parsed < 0 || parsed > 255) {
+            throw new Error(`Invalid uint8 value: ${part}`);
         }
 
-        throw e;
-    }
+        return parsed;
+    });
 }
 
 /**
- * @param {string} dumpDir
- * @param {string} getStdout
+ * @param {Array<string>} args
+ * @returns {Array<[number,number,number,number]>}
+ */
+function parseRectArgs(args) {
+    if (args.length < 4 || args.length % 4 !== 0) {
+        throw new Error("custom requires x1 y1 x2 y2 [x1 y1 x2 y2 ...]");
+    }
+    const values = args.map(v => Number(v));
+    if (values.some(v => !Number.isFinite(v))) {
+        throw new Error("custom rectangle values must be numeric");
+    }
+    const out = [];
+    for (let i = 0; i < values.length; i += 4) {
+        out.push([values[i], values[i + 1], values[i + 2], values[i + 3]]);
+    }
+
+    return out;
+}
+
+/**
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+module.exports = EcovacsT8AiviValetudoRobot;
+
+/**
+ * @param {{mapid:number,info:{mapWidth:number,mapHeight:number,columns:number,rows:number,submapWidth:number,submapHeight:number,resolution:number},submaps:Array<{data:Buffer}>}} response
  * @returns {{width:number,height:number,columns:number,rows:number,submapWidth:number,submapHeight:number,resolutionCm:number,floorPixels:Array<[number,number]>,wallPixels:Array<[number,number]>}}
  */
-function decodeCompressedMapDump(dumpDir, getStdout) {
+function decodeCompressedMapResponse(response) {
     const decodeStartedAt = Date.now();
-    const meta = parseCompressMapMeta(getStdout);
-    const indexPath = path.join(dumpDir, "index.tsv");
-    const rows = readDumpIndex(indexPath);
-    const expectedSubmaps = meta.columns * meta.rows;
-    if (rows.length < expectedSubmaps) {
-        throw new Error(`Compressed map dump incomplete: expected ${expectedSubmaps}, got ${rows.length}`);
+    const info = response.info;
+    const expectedSubmaps = info.columns * info.rows;
+    if (!Array.isArray(response.submaps) || response.submaps.length < expectedSubmaps) {
+        throw new Error(`Compressed map response incomplete: expected ${expectedSubmaps}, got ${response.submaps?.length ?? 0}`);
     }
 
     /** @type {Array<[number, number]>} */
@@ -951,26 +997,22 @@ function decodeCompressedMapDump(dumpDir, getStdout) {
     /** @type {Array<[number, number]>} */
     const wallPixels = [];
 
-    for (const row of rows) {
-        const tileIndex = Number(row.index);
-        if (!Number.isFinite(tileIndex) || tileIndex < 0) {
-            continue;
-        }
-        const tilePath = path.join(dumpDir, row.file);
-        const decoded = decodeEcovacsCompressedSubmap(fs.readFileSync(tilePath));
-        const expectedTileLen = meta.submapWidth * meta.submapHeight;
+    for (let tileIndex = 0; tileIndex < response.submaps.length; tileIndex++) {
+        const submap = response.submaps[tileIndex];
+        const decoded = decodeEcovacsCompressedSubmap(submap.data);
+        const expectedTileLen = info.submapWidth * info.submapHeight;
         if (decoded.length !== expectedTileLen) {
-            throw new Error(`Tile length mismatch in ${row.file}: ${decoded.length} != ${expectedTileLen}`);
+            throw new Error(`Tile length mismatch for submap ${tileIndex}: ${decoded.length} != ${expectedTileLen}`);
         }
 
-        const tileRow = Math.floor(tileIndex / meta.columns);
-        const tileCol = tileIndex % meta.columns;
-        const baseX = tileCol * meta.submapWidth;
-        const baseY = tileRow * meta.submapHeight;
+        const tileRow = Math.floor(tileIndex / info.columns);
+        const tileCol = tileIndex % info.columns;
+        const baseX = tileCol * info.submapWidth;
+        const baseY = tileRow * info.submapHeight;
 
-        for (let y = 0; y < meta.submapHeight; y++) {
-            const srcOffset = y * meta.submapWidth;
-            for (let x = 0; x < meta.submapWidth; x++) {
+        for (let y = 0; y < info.submapHeight; y++) {
+            const srcOffset = y * info.submapWidth;
+            for (let x = 0; x < info.submapWidth; x++) {
                 const value = decoded[srcOffset + x];
                 const mapX = baseX + x;
                 const mapY = baseY + y;
@@ -984,18 +1026,18 @@ function decodeCompressedMapDump(dumpDir, getStdout) {
     }
 
     const result = {
-        width: meta.width,
-        height: meta.height,
-        columns: meta.columns,
-        rows: meta.rows,
-        submapWidth: meta.submapWidth,
-        submapHeight: meta.submapHeight,
-        resolutionCm: inferCompressedMapPixelSizeCm(meta.resolutionRaw),
+        width: info.mapWidth,
+        height: info.mapHeight,
+        columns: info.columns,
+        rows: info.rows,
+        submapWidth: info.submapWidth,
+        submapHeight: info.submapHeight,
+        resolutionCm: inferCompressedMapPixelSizeCm(info.resolution),
         floorPixels: floorPixels,
         wallPixels: wallPixels
     };
     Logger.debug(
-        `Ecovacs compressed map decode: ${rows.length} submaps, floor=${floorPixels.length}, wall=${wallPixels.length}, took=${Date.now() - decodeStartedAt}ms`
+        `Ecovacs compressed map decode: ${response.submaps.length} submaps, floor=${floorPixels.length}, wall=${wallPixels.length}, took=${Date.now() - decodeStartedAt}ms`
     );
 
     return result;
@@ -1030,30 +1072,6 @@ function decodeEcovacsCompressedSubmap(raw) {
 }
 
 /**
- * @param {string} stdout
- * @returns {{width:number,height:number,columns:number,rows:number,submapWidth:number,submapHeight:number,resolutionCm:number}}
- */
-function parseCompressMapMeta(stdout) {
-    const text = String(stdout ?? "");
-    const metaMatch = text.match(
-        /meta:\s*width=(\d+)\s+height=(\d+)\s+columns=(\d+)\s+rows=(\d+)\s+submapWidth=(\d+)\s+submapHeight=(\d+)\s+resolution_cm=(\d+)/
-    );
-    if (!metaMatch) {
-        throw new Error(`Unable to parse compressed map metadata from ros_map.py output: ${text}`);
-    }
-
-    return {
-        width: Number(metaMatch[1]),
-        height: Number(metaMatch[2]),
-        columns: Number(metaMatch[3]),
-        rows: Number(metaMatch[4]),
-        submapWidth: Number(metaMatch[5]),
-        submapHeight: Number(metaMatch[6]),
-        resolutionRaw: Number(metaMatch[7])
-    };
-}
-
-/**
  * Ecovacs `resolution` is observed as 50 for 5cm maps.
  * Treat values >= 20 as millimeters, otherwise centimeters.
  *
@@ -1070,34 +1088,6 @@ function inferCompressedMapPixelSizeCm(raw) {
     }
 
     return Math.max(1, Math.round(v));
-}
-
-/**
- * @param {string} indexPath
- * @returns {Array<{index:string,file:string}>}
- */
-function readDumpIndex(indexPath) {
-    const raw = fs.readFileSync(indexPath, "utf8");
-    const lines = raw.split(/\r?\n/).filter(Boolean);
-    if (lines.length < 2) {
-        return [];
-    }
-
-    const header = lines[0].split("\t");
-    const indexIdx = header.indexOf("index");
-    const fileIdx = header.indexOf("file");
-    if (indexIdx < 0 || fileIdx < 0) {
-        throw new Error(`Invalid compressed map index header in ${indexPath}`);
-    }
-
-    return lines.slice(1).map(line => {
-        const cols = line.split("\t");
-
-        return {
-            index: cols[indexIdx],
-            file: cols[fileIdx]
-        };
-    }).filter(entry => entry.file);
 }
 
 /**
@@ -1386,14 +1376,6 @@ function formatMapStats(map) {
 }
 
 /**
- * @param {any} pose
- * @returns {boolean}
- */
-function hasNumericRobotPose(pose) {
-    return Boolean(pose && typeof pose.x === "number" && typeof pose.y === "number");
-}
-
-/**
  * @param {import("../../entities/map/ValetudoMap")} map
  * @returns {boolean}
  */
@@ -1407,16 +1389,6 @@ function hasRobotEntity(map) {
  */
 function hasChargerEntity(map) {
     return Array.isArray(map?.entities) && map.entities.some(entity => entity?.type === mapEntities.PointMapEntity.TYPE.CHARGER_LOCATION);
-}
-
-/**
- * @param {number} ms
- * @returns {Promise<void>}
- */
-function sleep(ms) {
-    return new Promise(resolve => {
-        setTimeout(resolve, ms);
-    });
 }
 
 /**

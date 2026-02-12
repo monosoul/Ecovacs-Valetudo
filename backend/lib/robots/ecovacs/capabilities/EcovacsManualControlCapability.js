@@ -63,22 +63,22 @@ class EcovacsManualControlCapability extends ManualControlCapability {
         let command;
         switch (movementCommand) {
             case ManualControlCapability.MOVEMENT_COMMAND_TYPE.FORWARD:
-                command = "remote-forward";
+                command = "remote-hold-forward";
                 break;
             case ManualControlCapability.MOVEMENT_COMMAND_TYPE.BACKWARD:
-                command = "remote-backward";
+                command = "remote-hold-backward";
                 break;
             case ManualControlCapability.MOVEMENT_COMMAND_TYPE.ROTATE_CLOCKWISE:
-                command = "remote-turn-right";
+                command = "remote-hold-turn-right";
                 break;
             case ManualControlCapability.MOVEMENT_COMMAND_TYPE.ROTATE_COUNTERCLOCKWISE:
-                command = "remote-turn-left";
+                command = "remote-hold-turn-left";
                 break;
             default:
                 throw new Error("Invalid movementCommand.");
         }
 
-        await this.robot.runStartCleanCommand([command]);
+        await this.robot.runStartCleanCommand([command, "0.35"]);
     }
 }
 
