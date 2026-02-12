@@ -35,12 +35,15 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.detailedMapMaxLayerPixels = implementationSpecificConfig.detailedMapMaxLayerPixels ?? 900_000;
         this.detailedMapMinFloorPixels = implementationSpecificConfig.detailedMapMinFloorPixels ?? 1_000;
         this.detailedMapMinFloorCoverageRatio = implementationSpecificConfig.detailedMapMinFloorCoverageRatio ?? 0.2;
+        this.detailedMapRefreshIntervalMs = implementationSpecificConfig.detailedMapRefreshIntervalMs ?? 120_000;
         this.detailedMapRotationDegrees = implementationSpecificConfig.detailedMapRotationDegrees ?? 270;
         this.detailedMapWorldMmPerPixel = implementationSpecificConfig.detailedMapWorldMmPerPixel ?? 50;
         this.manualControlSessionCode = implementationSpecificConfig.manualControlSessionCode;
         this.manualControlActiveFlag = false;
         this.lastRobotPose = null;
         this.lastRobotPoseAt = 0;
+        this.cachedCompressedMap = null;
+        this.cachedCompressedMapAt = 0;
 
         this.state.upsertFirstMatchingAttribute(new stateAttrs.DockStatusStateAttribute({
             value: stateAttrs.DockStatusStateAttribute.VALUE.IDLE
@@ -118,16 +121,25 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             const mapDumpDir = `/tmp/valetudo_ecovacs_map_${Date.now()}_${Math.round(Math.random() * 1e6)}`;
             try {
                 const detailedMapStart = Date.now();
-                Logger.debug("Ecovacs map poll: fetching compressed map dump");
-                const getOut = await this.runMapCommandWithTimeout(
-                    ["get", "--mapid", "0", "--out-dir", mapDumpDir],
-                    Math.min(this.scriptTimeoutMs, 7_000)
-                );
-                Logger.debug("Ecovacs map poll: decoding compressed submaps");
-                const compressedMap = decodeCompressedMapDump(mapDumpDir, getOut.stdout);
-                Logger.debug(
-                    `Ecovacs map poll: decoded compressed map (${compressedMap.width}x${compressedMap.height})`
-                );
+                let compressedMap = this.cachedCompressedMap;
+                const cacheAgeMs = Date.now() - this.cachedCompressedMapAt;
+                const cacheValid = compressedMap !== null && cacheAgeMs >= 0 && cacheAgeMs < this.detailedMapRefreshIntervalMs;
+                if (cacheValid) {
+                    Logger.debug(`Ecovacs map poll: using cached compressed map (${cacheAgeMs}ms old)`);
+                } else {
+                    Logger.debug("Ecovacs map poll: fetching compressed map dump");
+                    const getOut = await this.runMapCommandWithTimeout(
+                        ["get", "--mapid", "0", "--out-dir", mapDumpDir],
+                        Math.min(this.scriptTimeoutMs, 7_000)
+                    );
+                    Logger.debug("Ecovacs map poll: decoding compressed submaps");
+                    compressedMap = decodeCompressedMapDump(mapDumpDir, getOut.stdout);
+                    this.cachedCompressedMap = compressedMap;
+                    this.cachedCompressedMapAt = Date.now();
+                    Logger.debug(
+                        `Ecovacs map poll: decoded compressed map (${compressedMap.width}x${compressedMap.height})`
+                    );
+                }
                 const detailedMap = this.buildDetailedMapAlignedToSimplified(
                     roomDump.rooms,
                     positions,
