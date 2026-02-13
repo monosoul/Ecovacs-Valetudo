@@ -84,6 +84,7 @@ const LIFESPAN_PART = {
 };
 
 const SETTING_TYPE = {
+    AUTO_COLLECT: 13,
     WATER_LEVEL: 6,
     FAN_LEVEL: 7,
     ROOM_PREFERENCES: 14,
@@ -784,9 +785,12 @@ class EcovacsRosFacade {
             settingType: SETTING_TYPE.ROOM_PREFERENCES
         });
         const body = await this.settingClient.call(request);
-        const parsed = parseSettingManageResponse(body);
+        const value = decodeSettingTailValue(body, SETTING_TYPE.ROOM_PREFERENCES);
+        if (!Number.isInteger(value)) {
+            throw new Error("ROOM_PREFERENCES value not found in SettingManage response");
+        }
 
-        return parsed.autoCollect === 1 ? "on" : "off";
+        return value === 1 ? "on" : "off";
     }
 
     /**
@@ -798,9 +802,26 @@ class EcovacsRosFacade {
             settingType: SETTING_TYPE.CLEANING_TIMES
         });
         const body = await this.settingClient.call(request);
+        const value = decodeSettingTailValue(body, SETTING_TYPE.CLEANING_TIMES);
+        if (!Number.isInteger(value)) {
+            throw new Error("CLEANING_TIMES value not found in SettingManage response");
+        }
+
+        return value;
+    }
+
+    /**
+     * @returns {Promise<"on"|"off">}
+     */
+    async getAutoCollectEnabled() {
+        const request = serializeSettingManageRequest({
+            manageType: SETTING_MANAGE_TYPE.GET,
+            settingType: SETTING_TYPE.AUTO_COLLECT
+        });
+        const body = await this.settingClient.call(request);
         const parsed = parseSettingManageResponse(body);
 
-        return parsed.autoCollect;
+        return parsed.autoCollect === 1 ? "on" : "off";
     }
 
     /**
@@ -879,6 +900,22 @@ class EcovacsRosFacade {
         const request = serializeSettingManageRequest({
             manageType: SETTING_MANAGE_TYPE.SET,
             settingType: SETTING_TYPE.ROOM_PREFERENCES,
+            autoCollectVal: value === "on" ? 1 : 0
+        });
+        const body = await this.settingClient.call(request);
+        const parsed = parseSettingManageResponse(body);
+
+        return parsed.response;
+    }
+
+    /**
+     * @param {"on"|"off"} value
+     * @returns {Promise<number>}
+     */
+    async setAutoCollectEnabled(value) {
+        const request = serializeSettingManageRequest({
+            manageType: SETTING_MANAGE_TYPE.SET,
+            settingType: SETTING_TYPE.AUTO_COLLECT,
             autoCollectVal: value === "on" ? 1 : 0
         });
         const body = await this.settingClient.call(request);
@@ -1274,6 +1311,30 @@ function parseSettingManageResponse(body) {
 }
 
 /**
+ * Some setting values are encoded in setting-specific tail bytes in responses
+ * on this firmware.
+ *
+ * @param {Buffer} body
+ * @param {number} settingType
+ * @returns {number|null}
+ */
+function decodeSettingTailValue(body, settingType) {
+    if (!Buffer.isBuffer(body) || body.length < 1) {
+        return null;
+    }
+
+    if (settingType === SETTING_TYPE.ROOM_PREFERENCES) {
+        return body.length >= 2 ? body.readUInt8(body.length - 2) : null;
+    }
+
+    if (settingType === SETTING_TYPE.CLEANING_TIMES) {
+        return body.readUInt8(body.length - 1);
+    }
+
+    return null;
+}
+
+/**
  * @param {Buffer} body
  * @returns {{result:number,mapid:number,vwalls:Array<{vwid:number,type:number,dots:Array<[number,number]>}>}}
  */
@@ -1477,12 +1538,26 @@ function serializeSettingManageRequest(options) {
     const aiSettingVals = Buffer.alloc(5, 0);
     const aiLen = encodeUInt32(aiSettingVals.length);
     const tail = Buffer.alloc(10, 0);
-    if (Number.isInteger(options.autoCollectVal)) {
-        tail.writeUInt8(options.autoCollectVal & 0xff, 9);
-    }
     const padding = Buffer.from([0, 0]); // capture-validated
+    const body = Buffer.concat([fixed, aiLen, aiSettingVals, tail, padding]);
+    if (Number.isInteger(options.autoCollectVal)) {
+        const value = options.autoCollectVal & 0xff;
 
-    return Buffer.concat([fixed, aiLen, aiSettingVals, tail, padding]);
+        // Wire offsets are setting-specific on this firmware (capture-validated):
+        // - settingType=14 (room preferences): second-to-last byte
+        // - settingType=15 (cleaning times):   last byte
+        if (options.settingType === SETTING_TYPE.ROOM_PREFERENCES) {
+            body.writeUInt8(value, body.length - 2);
+        } else if (options.settingType === SETTING_TYPE.CLEANING_TIMES) {
+            body.writeUInt8(value, body.length - 1);
+        } else if (options.settingType === SETTING_TYPE.AUTO_COLLECT) {
+            body.writeUInt8(value, body.length - 3);
+        } else {
+            throw new Error(`Unsupported autoCollectVal settingType=${options.settingType}`);
+        }
+    }
+
+    return body;
 }
 
 /**

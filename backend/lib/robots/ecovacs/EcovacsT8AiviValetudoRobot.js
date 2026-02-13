@@ -1,4 +1,5 @@
 const capabilities = require("./capabilities");
+const EcovacsQuirkFactory = require("./EcovacsQuirkFactory");
 const EcovacsRosFacade = require("./ros/services/EcovacsRosFacade");
 const entities = require("../../entities");
 const fs = require("fs");
@@ -6,6 +7,7 @@ const Logger = require("../../Logger");
 const lzma = require("lzma-purejs");
 const mapEntities = require("../../entities/map");
 const MdsctlClient = require("./ros/services/MdsctlClient");
+const QuirksCapability = require("../../core/capabilities/QuirksCapability");
 const ValetudoRobot = require("../../core/ValetudoRobot");
 require("./lzmaPurejsPkgIncludes");
 
@@ -156,6 +158,17 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.registerCapability(new capabilities.EcovacsMapSegmentationCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsZoneCleaningCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsCombinedVirtualRestrictionsCapability({robot: this}));
+
+        const quirkFactory = new EcovacsQuirkFactory({
+            robot: this
+        });
+        this.registerCapability(new QuirksCapability({
+            robot: this,
+            quirks: [
+                quirkFactory.getQuirk(EcovacsQuirkFactory.KNOWN_QUIRKS.AUTO_COLLECT),
+                quirkFactory.getQuirk(EcovacsQuirkFactory.KNOWN_QUIRKS.ROOM_CLEANING_PREFERENCES)
+            ]
+        }));
     }
 
     getManufacturer() {
