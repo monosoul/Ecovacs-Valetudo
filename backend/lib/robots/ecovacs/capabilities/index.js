@@ -1,4 +1,5 @@
 module.exports = {
+    EcovacsAutoEmptyDockManualTriggerCapability: require("./EcovacsAutoEmptyDockManualTriggerCapability"),
     EcovacsBasicControlCapability: require("./EcovacsBasicControlCapability"),
     EcovacsCarpetModeControlCapability: require("./EcovacsCarpetModeControlCapability"),
     EcovacsCleanRouteControlCapability: require("./EcovacsCleanRouteControlCapability"),
