@@ -48,8 +48,8 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         const implementationSpecificConfig = options.config.get("robot")?.implementationSpecificConfig ?? {};
 
         this.mapPixelSizeCm = implementationSpecificConfig.mapPixelSizeCm ?? 5;
-        this.detailedMapUpgradeEnabled = implementationSpecificConfig.detailedMapUpgradeEnabled ?? false;
-        this.detailedMapMaxLayerPixels = implementationSpecificConfig.detailedMapMaxLayerPixels ?? 900_000;
+        this.detailedMapUpgradeEnabled = implementationSpecificConfig.detailedMapUpgradeEnabled ?? true;
+        this.detailedMapMaxLayerPixels = implementationSpecificConfig.detailedMapMaxLayerPixels ?? 120_000;
         this.detailedMapMinFloorPixels = implementationSpecificConfig.detailedMapMinFloorPixels ?? 1_000;
         this.detailedMapMinFloorCoverageRatio = implementationSpecificConfig.detailedMapMinFloorCoverageRatio ?? 0.2;
         this.detailedMapRefreshIntervalMs = implementationSpecificConfig.detailedMapRefreshIntervalMs ?? 120_000;

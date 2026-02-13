@@ -217,10 +217,10 @@ All keys live under `robot.implementationSpecificConfig`.
 | Key | Default | Description |
 |---|---|---|
 | `mapPixelSizeCm` | `5` | Pixel size in cm for the room-polygon-based map |
-| `detailedMapUpgradeEnabled` | `false` | Use compressed raster map with full transforms instead of simplified room-only map |
+| `detailedMapUpgradeEnabled` | `true` | Use compressed raster map with full transforms instead of simplified room-only map |
 | `detailedMapRotationDegrees` | `270` | Clockwise rotation applied to the compressed raster |
 | `detailedMapWorldMmPerPixel` | `50` | World-space mm per raster pixel |
-| `detailedMapMaxLayerPixels` | `900000` | Max pixels per map layer before skipping detailed upgrade |
+| `detailedMapMaxLayerPixels` | `120000` | Max pixels per map layer before skipping detailed upgrade |
 | `detailedMapMinFloorPixels` | `1000` | Min floor pixels required for detailed map to be valid |
 | `detailedMapMinFloorCoverageRatio` | `0.2` | Min ratio of raster floor pixels vs room polygon pixels |
 | `detailedMapRefreshIntervalMs` | `120000` | How often to re-fetch the compressed raster map |
@@ -251,3 +251,33 @@ All keys live under `robot.implementationSpecificConfig`.
 |---|---|---|
 | `runtimeStateCachePath` | `/tmp/valetudo_ecovacs_runtime_state.json` | File path for persisting runtime state across restarts |
 | `runtimeStateCacheWriteMinIntervalMs` | `5000` | Min interval between state cache writes |
+
+### Minimal config example
+
+When running on the robot itself, most defaults are correct out of the box.
+A minimal `valetudo.json` only needs the robot implementation and a manual
+control session code (if manual control is desired):
+
+```json
+{
+  "embedded": true,
+  "robot": {
+    "implementation": "EcovacsT8AiviValetudoRobot",
+    "implementationSpecificConfig": {
+      "manualControlSessionCode": "<your remote control code>",
+      "rosDebug": false
+    }
+  }
+}
+```
+
+### Running
+
+Save the config as `valetudo.json` and point Valetudo at it:
+
+```sh
+VALETUDO_CONFIG_PATH=/data/valetudo_config.json /data/valetudo
+```
+
+When running directly on the robot, the ROS master and `mdsctl` defaults
+will work without any extra environment variables.
