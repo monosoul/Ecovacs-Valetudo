@@ -1172,9 +1172,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 Number.isFinite(Number(cachedChargeState.isOnCharger)) &&
                 Number.isFinite(Number(cachedChargeState.chargeState))
             ) ? {
-                isOnCharger: Number(cachedChargeState.isOnCharger),
-                chargeState: Number(cachedChargeState.chargeState)
-            } : null;
+                    isOnCharger: Number(cachedChargeState.isOnCharger),
+                    chargeState: Number(cachedChargeState.chargeState)
+                } : null;
 
             return {
                 robotPose: parsed?.robotPose ?? null,
