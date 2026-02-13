@@ -64,6 +64,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.tracePointUnitMm = implementationSpecificConfig.tracePointUnitMm ?? 10;
         this.tracePathMaxPoints = implementationSpecificConfig.tracePathMaxPoints ?? 2000;
         this.traceTailEntries = implementationSpecificConfig.traceTailEntries ?? 1;
+        this.rosDebug = implementationSpecificConfig.rosDebug ?? true;
         this.manualControlSessionCode = implementationSpecificConfig.manualControlSessionCode;
         this.manualControlActiveFlag = false;
         this.lastRobotPose = null;
@@ -86,7 +87,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             callerId: implementationSpecificConfig.rosCallerId,
             connectTimeoutMs: implementationSpecificConfig.rosConnectTimeoutMs ?? 4_000,
             callTimeoutMs: implementationSpecificConfig.rosCallTimeoutMs ?? 6_000,
-            debug: implementationSpecificConfig.rosDebug ?? true,
+            debug: this.rosDebug,
             onWarn: (msg, err) => Logger.debug(`Ecovacs ROS: ${msg}: ${err ?? ""}`)
         });
         this.mdsctlClient = new MdsctlClient({
@@ -223,7 +224,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 robotPoseSnapshot,
                 this.tracePathPointsMm
             ) ?? simplifiedMap;
-            Logger.info(`Ecovacs map poll: simplified map stats ${formatMapStats(simplifiedWithDynamicEntities)}`);
+            if (this.rosDebug) {
+                Logger.info(`Ecovacs map poll: simplified map stats ${formatMapStats(simplifiedWithDynamicEntities)}`);
+            }
             Logger.debug(
                 `Ecovacs entities: simplified robot=${hasRobotEntity(simplifiedWithDynamicEntities)} charger=${hasChargerEntity(simplifiedWithDynamicEntities)}`
             );
@@ -264,7 +267,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 const simpleFloorPixels = getLayerPixelCountByType(simplifiedWithDynamicEntities, mapEntities.MapLayer.TYPE.FLOOR);
                 const detailedFloorPixels = getLayerPixelCountByType(detailedWithDynamicEntities, mapEntities.MapLayer.TYPE.FLOOR);
                 const floorCoverageRatio = simpleFloorPixels > 0 ? (detailedFloorPixels / simpleFloorPixels) : 0;
-                Logger.info(`Ecovacs map poll: detailed map stats ${formatMapStats(detailedWithDynamicEntities)}`);
+                if (this.rosDebug) {
+                    Logger.info(`Ecovacs map poll: detailed map stats ${formatMapStats(detailedWithDynamicEntities)}`);
+                }
                 Logger.debug(
                     `Ecovacs entities: detailed robot=${hasRobotEntity(detailedWithDynamicEntities)} charger=${hasChargerEntity(detailedWithDynamicEntities)}`
                 );
@@ -290,7 +295,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 }
                 this.state.map = detailedWithDynamicEntities;
                 this.emitMapUpdated();
-                Logger.info(`Ecovacs map poll: detailed map upgraded in ${Date.now() - detailedMapStart}ms`);
+                if (this.rosDebug) {
+                    Logger.info(`Ecovacs map poll: detailed map upgraded in ${Date.now() - detailedMapStart}ms`);
+                }
             } catch (e) {
                 Logger.warn("Ecovacs map poll: detailed map unavailable, using simplified fallback", e?.message ?? e);
                 this.state.map = simplifiedWithDynamicEntities;
