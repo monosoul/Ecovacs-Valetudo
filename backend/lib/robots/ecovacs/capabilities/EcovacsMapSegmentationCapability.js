@@ -62,10 +62,12 @@ class EcovacsMapSegmentationCapability extends MapSegmentationCapability {
         );
 
         // Update cache immediately so the UI reflects the change
+        const existing = this.robot.cachedRoomCleaningPreferences[String(roomId)] ?? {};
         this.robot.cachedRoomCleaningPreferences[String(roomId)] = {
             suction: preferences.suction,
             water: preferences.water,
             times: preferences.times,
+            sequence: existing.sequence ?? 0,
         };
 
         // Trigger a map poll so the map layers also get refreshed

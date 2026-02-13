@@ -42,12 +42,11 @@ const SERVICES = {
         candidates: ["/task/WorkManage", "/task/workManage", "/task/work_manage"]
     },
     setting: {
-        // capture-validated md5, generated class md5 can differ on device
-        md5: process.env.ROS_SETTING_MD5 ?? "9b750807a5def60e40619d50b06ae034",
+        md5: "9b750807a5def60e40619d50b06ae034",
         candidates: ["/setting/SettingManage", "/setting/settingManage", "/setting/setting_manage"]
     },
     lifespan: {
-        md5: process.env.ROS_LIFESPAN_MD5 ?? "35c020f6d3af5b57369fe7f26779c5d8",
+        md5: "35c020f6d3af5b57369fe7f26779c5d8",
         candidates: ["/lifespan/lifespan", "/lifespan/lifespansrv"]
     }
 };
@@ -128,82 +127,31 @@ class EcovacsRosFacade {
         });
         this.callerId = callerId;
 
-        this.mapClient = new PersistentServiceClient({
-            masterClient: this.masterClient,
-            callerId: this.callerId,
-            serviceCandidates: SERVICES.map.candidates,
-            serviceMd5: SERVICES.map.md5,
-            connectTimeoutMs: options.connectTimeoutMs,
-            callTimeoutMs: options.callTimeoutMs,
-            debug: debug
-        });
-        this.spotAreaClient = new PersistentServiceClient({
-            masterClient: this.masterClient,
-            callerId: this.callerId,
-            serviceCandidates: SERVICES.spotArea.candidates,
-            serviceMd5: SERVICES.spotArea.md5,
-            connectTimeoutMs: options.connectTimeoutMs,
-            callTimeoutMs: options.callTimeoutMs,
-            debug: debug
-        });
-        this.chargerClient = new PersistentServiceClient({
-            masterClient: this.masterClient,
-            callerId: this.callerId,
-            serviceCandidates: SERVICES.charger.candidates,
-            serviceMd5: SERVICES.charger.md5,
-            connectTimeoutMs: options.connectTimeoutMs,
-            callTimeoutMs: options.callTimeoutMs,
-            debug: debug
-        });
-        this.traceClient = new PersistentServiceClient({
-            masterClient: this.masterClient,
-            callerId: this.callerId,
-            serviceCandidates: SERVICES.trace.candidates,
-            serviceMd5: SERVICES.trace.md5,
-            connectTimeoutMs: options.connectTimeoutMs,
-            callTimeoutMs: options.callTimeoutMs,
-            debug: debug
-        });
-        this.virtualWallClient = new PersistentServiceClient({
-            masterClient: this.masterClient,
-            callerId: this.callerId,
-            serviceCandidates: SERVICES.virtualWall.candidates,
-            serviceMd5: SERVICES.virtualWall.md5,
-            connectTimeoutMs: options.connectTimeoutMs,
-            callTimeoutMs: options.callTimeoutMs,
-            persistent: false,
-            debug: debug
-        });
-        this.workClient = new PersistentServiceClient({
-            masterClient: this.masterClient,
-            callerId: this.callerId,
-            serviceCandidates: SERVICES.work.candidates,
-            serviceMd5: SERVICES.work.md5,
-            connectTimeoutMs: options.connectTimeoutMs,
-            callTimeoutMs: options.callTimeoutMs,
-            persistent: false,
-            debug: debug
-        });
-        this.settingClient = new PersistentServiceClient({
-            masterClient: this.masterClient,
-            callerId: this.callerId,
-            serviceCandidates: SERVICES.setting.candidates,
-            serviceMd5: SERVICES.setting.md5,
-            connectTimeoutMs: options.connectTimeoutMs,
-            callTimeoutMs: options.callTimeoutMs,
-            persistent: false,
-            debug: debug
-        });
-        this.lifespanClient = new PersistentServiceClient({
-            masterClient: this.masterClient,
-            callerId: this.callerId,
-            serviceCandidates: SERVICES.lifespan.candidates,
-            serviceMd5: SERVICES.lifespan.md5,
-            connectTimeoutMs: options.connectTimeoutMs,
-            callTimeoutMs: options.callTimeoutMs,
-            persistent: false,
-            debug: debug
-        });
+        /**
+         * @param {keyof SERVICES} key
+         * @param {{persistent?:boolean}} [extra]
+         */
+        const makeClient = (key, extra) => {
+            return new PersistentServiceClient({
+                masterClient: this.masterClient,
+                callerId: this.callerId,
+                serviceCandidates: SERVICES[key].candidates,
+                serviceMd5: SERVICES[key].md5,
+                connectTimeoutMs: options.connectTimeoutMs,
+                callTimeoutMs: options.callTimeoutMs,
+                debug: debug,
+                ...extra
+            });
+        };
+
+        this.mapClient = makeClient("map");
+        this.spotAreaClient = makeClient("spotArea");
+        this.chargerClient = makeClient("charger");
+        this.traceClient = makeClient("trace");
+        this.virtualWallClient = makeClient("virtualWall", {persistent: false});
+        this.workClient = makeClient("work", {persistent: false});
+        this.settingClient = makeClient("setting", {persistent: false});
+        this.lifespanClient = makeClient("lifespan", {persistent: false});
 
         this.poseSubscriber = new PredictionPoseSubscriber({
             masterClient: this.masterClient,
@@ -307,16 +255,16 @@ class EcovacsRosFacade {
 
     /**
      * @param {number} mapId
-     * @returns {Promise<{header:{result:number,mapid:number,areasId:number,areaCount:number},rooms:Array<any>,roomPreferences:any}>}
+     * @returns {Promise<{header:{result:number,mapid:number,areasId:number,areaCount:number},rooms:Array<any>}>}
      */
     async getRooms(mapId) {
         const body = await this.callSpotAreaGetWithFallback(mapId);
 
         const header = parseRoomsHeaderOnly(body);
         const rooms = extractRoomPolygonsDeterministic(body, header.areaCount);
-        const roomPreferences = decodeRoomPreferencesFromGetResponse(body);
+        const decodedPrefs = decodeRoomPreferencesFromGetResponse(body);
         const preferencesByIndex = {};
-        for (const pref of roomPreferences.rooms) {
+        for (const pref of decodedPrefs.rooms) {
             preferencesByIndex[pref.index] = pref;
         }
 
@@ -340,8 +288,7 @@ class EcovacsRosFacade {
                     preference_sequence: decoded?.sequence_position ?? 0,
                     preference_connections: decoded?.connections ?? []
                 };
-            }),
-            roomPreferences: roomPreferences
+            })
         };
     }
 
@@ -1519,13 +1466,27 @@ function buildRoomsSetLabelRequest(mapId, roomId, labelId) {
  * @param {number} suctionPower
  * @returns {Buffer}
  */
-function buildRoomPreferencesRequest(mapId, roomId, cleaningTimes, waterLevel, suctionPower) {
-    // Capture-validated SET format: 17-byte header + 30-byte room block = 47 bytes
-    const body = Buffer.alloc(47);
-    body.writeUInt8(SPOT_AREA_ROOM_PREFS_TYPE, 0);       // type = 4
-    body.writeUInt32LE(mapId >>> 0, 1);                   // mapid
+/**
+ * Build a SpotArea custom request with the standard 17-byte header
+ * (type + mapid + 8 zeros + room_count) followed by roomCount * 30-byte blocks.
+ *
+ * @param {number} type
+ * @param {number} mapId
+ * @param {number} roomCount
+ * @returns {Buffer}
+ */
+function allocSpotAreaRoomBlockRequest(type, mapId, roomCount) {
+    const body = Buffer.alloc(17 + roomCount * 30);
+    body.writeUInt8(type, 0);
+    body.writeUInt32LE(mapId >>> 0, 1);
     // bytes 5..12: zeros (padding)
-    body.writeUInt32LE(1, 13);                            // room_count = 1
+    body.writeUInt32LE(roomCount, 13);
+
+    return body;
+}
+
+function buildRoomPreferencesRequest(mapId, roomId, cleaningTimes, waterLevel, suctionPower) {
+    const body = allocSpotAreaRoomBlockRequest(SPOT_AREA_ROOM_PREFS_TYPE, mapId, 1);
     // Room block (30 bytes) at offset 17:
     body.writeUInt8(roomId & 0xFF, 17);                   // room_index
     // bytes 18..33: zeros (padding)
@@ -1539,22 +1500,15 @@ function buildRoomPreferencesRequest(mapId, roomId, cleaningTimes, waterLevel, s
 
 /**
  * Build room cleaning sequence/order SET request (type=5).
- *
- * Header (17 bytes): type=5, mapid, 8 zeros, room_count
- * Room block (30 bytes each): room_index(u8) + 28 zeros + sequence_position(u8)
+ * Room block: room_index(u8) + 28 zeros + sequence_position(u8)
  *
  * @param {number} mapId
  * @param {Array<{roomIndex:number, position:number}>} sequence - position is 1-based (0 = not in sequence)
  * @returns {Buffer}
  */
 function buildRoomSequenceRequest(mapId, sequence) {
-    const roomCount = sequence.length;
-    const body = Buffer.alloc(17 + roomCount * 30);
-    body.writeUInt8(SPOT_AREA_SEQUENCE_TYPE, 0);
-    body.writeUInt32LE(mapId >>> 0, 1);
-    // bytes 5..12: zeros
-    body.writeUInt32LE(roomCount, 13);
-    for (let i = 0; i < roomCount; i++) {
+    const body = allocSpotAreaRoomBlockRequest(SPOT_AREA_SEQUENCE_TYPE, mapId, sequence.length);
+    for (let i = 0; i < sequence.length; i++) {
         const offset = 17 + i * 30;
         body.writeUInt8(sequence[i].roomIndex & 0xFF, offset);
         body.writeUInt8(sequence[i].position & 0xFF, offset + 29);

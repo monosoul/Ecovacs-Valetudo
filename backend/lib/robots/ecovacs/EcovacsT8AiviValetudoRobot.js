@@ -666,16 +666,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             segmentLayers.push(new mapEntities.MapLayer({
                 type: mapEntities.MapLayer.TYPE.SEGMENT,
                 pixels: pixels.sort(mapEntities.MapLayer.COORDINATE_TUPLE_SORT).flat(),
-                metaData: {
-                    segmentId: room.index,
-                    name: room.labelName,
-                    roomCleaningPreferences: {
-                        times: room.preference_times,
-                        water: room.preference_water,
-                        suction: room.preference_suction
-                    },
-                    roomCleaningSequence: room.preference_sequence ?? 0
-                }
+                metaData: buildSegmentMetaData(room.index, room.labelName, room, {})
             }));
         });
 
@@ -851,16 +842,12 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             layers.push(new mapEntities.MapLayer({
                 type: mapEntities.MapLayer.TYPE.SEGMENT,
                 pixels: pixels.sort(mapEntities.MapLayer.COORDINATE_TUPLE_SORT).flat(),
-                metaData: {
-                    segmentId: String(room.index ?? "0"),
-                    name: room.label_name ?? `Room ${room.index ?? 0}`,
-                    roomCleaningPreferences: {
-                        times: room.preference_times ?? cachedPrefs.times,
-                        water: room.preference_water ?? cachedPrefs.water,
-                        suction: room.preference_suction ?? cachedPrefs.suction
-                    },
-                    roomCleaningSequence: room.preference_sequence ?? cachedPrefs.sequence ?? 0
-                }
+                metaData: buildSegmentMetaData(
+                    String(room.index ?? "0"),
+                    room.label_name ?? `Room ${room.index ?? 0}`,
+                    room,
+                    cachedPrefs
+                )
             }));
         }
 
@@ -2151,6 +2138,28 @@ function mapCmToWorldMm(transform, mapXcm, mapYcm, pixelSizeCm) {
     }
 
     return null;
+}
+
+/**
+ * Build segment layer metadata for a room, with cache fallback.
+ *
+ * @param {string} segmentId
+ * @param {string} name
+ * @param {{preference_times?:number, preference_water?:number, preference_suction?:number, preference_sequence?:number}} room
+ * @param {{times?:number, water?:number, suction?:number, sequence?:number}} cachedPrefs
+ * @returns {{segmentId:string, name:string, roomCleaningPreferences:{times:number, water:number, suction:number}, roomCleaningSequence:number}}
+ */
+function buildSegmentMetaData(segmentId, name, room, cachedPrefs) {
+    return {
+        segmentId: segmentId,
+        name: name,
+        roomCleaningPreferences: {
+            times: room.preference_times ?? cachedPrefs.times,
+            water: room.preference_water ?? cachedPrefs.water,
+            suction: room.preference_suction ?? cachedPrefs.suction
+        },
+        roomCleaningSequence: room.preference_sequence ?? cachedPrefs.sequence ?? 0
+    };
 }
 
 /**
