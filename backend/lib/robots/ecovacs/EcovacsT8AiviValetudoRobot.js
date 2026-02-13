@@ -148,6 +148,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.registerCapability(new capabilities.EcovacsAutoEmptyDockManualTriggerCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsCarpetModeControlCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsCleanRouteControlCapability({robot: this}));
+        this.registerCapability(new capabilities.EcovacsConsumableMonitoringCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsFanSpeedControlCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsWaterUsageControlCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsMapSegmentEditCapability({robot: this}));

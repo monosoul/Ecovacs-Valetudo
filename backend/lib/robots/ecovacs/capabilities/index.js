@@ -4,6 +4,7 @@ module.exports = {
     EcovacsCarpetModeControlCapability: require("./EcovacsCarpetModeControlCapability"),
     EcovacsCleanRouteControlCapability: require("./EcovacsCleanRouteControlCapability"),
     EcovacsCombinedVirtualRestrictionsCapability: require("./EcovacsCombinedVirtualRestrictionsCapability"),
+    EcovacsConsumableMonitoringCapability: require("./EcovacsConsumableMonitoringCapability"),
     EcovacsFanSpeedControlCapability: require("./EcovacsFanSpeedControlCapability"),
     EcovacsLocateCapability: require("./EcovacsLocateCapability"),
     EcovacsManualControlCapability: require("./EcovacsManualControlCapability"),

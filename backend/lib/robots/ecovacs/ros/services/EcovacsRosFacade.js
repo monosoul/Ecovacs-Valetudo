@@ -42,6 +42,10 @@ const SERVICES = {
         // capture-validated md5, generated class md5 can differ on device
         md5: process.env.ROS_SETTING_MD5 ?? "9b750807a5def60e40619d50b06ae034",
         candidates: ["/setting/SettingManage", "/setting/settingManage", "/setting/setting_manage"]
+    },
+    lifespan: {
+        md5: process.env.ROS_LIFESPAN_MD5 ?? "35c020f6d3af5b57369fe7f26779c5d8",
+        candidates: ["/lifespan/lifespan", "/lifespan/lifespansrv"]
     }
 };
 
@@ -65,6 +69,18 @@ const WORK_TYPE = {
 const SETTING_MANAGE_TYPE = {
     GET: 0,
     SET: 1
+};
+
+const LIFESPAN_MANAGE_TYPE = {
+    GET: 0,
+    RESET: 1
+};
+
+const LIFESPAN_PART = {
+    MAIN_BRUSH: 0,
+    SIDE_BRUSH: 1,
+    HEPA: 2,
+    ALL: 3
 };
 
 const SETTING_TYPE = {
@@ -174,6 +190,16 @@ class EcovacsRosFacade {
             persistent: false,
             debug: debug
         });
+        this.lifespanClient = new PersistentServiceClient({
+            masterClient: this.masterClient,
+            callerId: this.callerId,
+            serviceCandidates: SERVICES.lifespan.candidates,
+            serviceMd5: SERVICES.lifespan.md5,
+            connectTimeoutMs: options.connectTimeoutMs,
+            callTimeoutMs: options.callTimeoutMs,
+            persistent: false,
+            debug: debug
+        });
 
         this.poseSubscriber = new PredictionPoseSubscriber({
             masterClient: this.masterClient,
@@ -236,6 +262,7 @@ class EcovacsRosFacade {
         await this.virtualWallClient.shutdown();
         await this.workClient.shutdown();
         await this.settingClient.shutdown();
+        await this.lifespanClient.shutdown();
     }
 
     /**
@@ -877,6 +904,34 @@ class EcovacsRosFacade {
     }
 
     /**
+     * @param {number} part
+     * @returns {Promise<{result:number,life:Array<number>,total:Array<number>}>}
+     */
+    async getLifespan(part) {
+        const request = serializeLifespanRequest({
+            type: LIFESPAN_MANAGE_TYPE.GET,
+            part: part
+        });
+        const body = await this.lifespanClient.call(request);
+
+        return parseLifespanResponse(body);
+    }
+
+    /**
+     * @param {number} part
+     * @returns {Promise<{result:number,life:Array<number>,total:Array<number>}>}
+     */
+    async resetLifespan(part) {
+        const request = serializeLifespanRequest({
+            type: LIFESPAN_MANAGE_TYPE.RESET,
+            part: part
+        });
+        const body = await this.lifespanClient.call(request);
+
+        return parseLifespanResponse(body);
+    }
+
+    /**
      * @param {Buffer} request
      * @returns {Promise<number>}
      */
@@ -1431,6 +1486,44 @@ function serializeSettingManageRequest(options) {
 }
 
 /**
+ * @param {{type:number,part:number}} options
+ * @returns {Buffer}
+ */
+function serializeLifespanRequest(options) {
+    return Buffer.from([
+        options.type & 0xff,
+        options.part & 0xff
+    ]);
+}
+
+/**
+ * @param {Buffer} body
+ * @returns {{result:number,life:Array<number>,total:Array<number>}}
+ */
+function parseLifespanResponse(body) {
+    const cursor = new BinaryCursor(body);
+    const result = cursor.readUInt8();
+    const lifeCount = cursor.readUInt32LE();
+    /** @type {Array<number>} */
+    const life = [];
+    for (let i = 0; i < lifeCount; i++) {
+        life.push(cursor.readUInt32LE());
+    }
+    const totalCount = cursor.readUInt32LE();
+    /** @type {Array<number>} */
+    const total = [];
+    for (let i = 0; i < totalCount; i++) {
+        total.push(cursor.readUInt32LE());
+    }
+
+    return {
+        result: result,
+        life: life,
+        total: total
+    };
+}
+
+/**
  * @param {Array<number>} values
  * @returns {Buffer}
  */
@@ -1471,3 +1564,4 @@ function looksLikeCoord(value) {
 }
 
 module.exports = EcovacsRosFacade;
+module.exports.LIFESPAN_PART = LIFESPAN_PART;
