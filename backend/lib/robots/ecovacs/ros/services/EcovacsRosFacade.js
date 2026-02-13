@@ -101,6 +101,7 @@ class EcovacsRosFacade {
         const callerId = options.callerId ?? process.env.ROS_CALLER_ID ?? "/ROSNODE";
 
         const debug = options.debug ?? false;
+        this.debug = debug;
         this.masterClient = new RosMasterXmlRpcClient({
             masterUri: masterUri,
             timeoutMs: options.connectTimeoutMs ?? 4000
@@ -880,13 +881,17 @@ class EcovacsRosFacade {
      * @returns {Promise<number>}
      */
     async callWorkManage(request) {
-        Logger.info(
-            `Ecovacs WorkManage request: bytes=${request.length} preview=${request.subarray(0, Math.min(24, request.length)).toString("hex")}`
-        );
+        if (this.debug) {
+            Logger.info(
+                `Ecovacs WorkManage request: bytes=${request.length} preview=${request.subarray(0, Math.min(24, request.length)).toString("hex")}`
+            );
+        }
         const body = await this.workClient.call(request);
-        Logger.info(
-            `Ecovacs WorkManage response: bytes=${body.length} hex=${body.toString("hex")}`
-        );
+        if (this.debug) {
+            Logger.info(
+                `Ecovacs WorkManage response: bytes=${body.length} hex=${body.toString("hex")}`
+            );
+        }
 
         return parseWorkManageResponse(body).response;
     }
