@@ -599,6 +599,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             return {
                 index: String(room.index ?? "0"),
                 labelName: room.label_name ?? `Room ${room.index ?? 0}`,
+                preference_times: room.preference_times,
+                preference_water: room.preference_water,
+                preference_suction: room.preference_suction,
                 polygonCm: polygon.map(point => {
                     return {
                         x: Math.round(Number(point[0]) / 10),
@@ -646,7 +649,12 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 pixels: pixels.sort(mapEntities.MapLayer.COORDINATE_TUPLE_SORT).flat(),
                 metaData: {
                     segmentId: room.index,
-                    name: room.labelName
+                    name: room.labelName,
+                    roomCleaningPreferences: {
+                        times: room.preference_times,
+                        water: room.preference_water,
+                        suction: room.preference_suction
+                    }
                 }
             }));
         });
@@ -824,7 +832,12 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 pixels: pixels.sort(mapEntities.MapLayer.COORDINATE_TUPLE_SORT).flat(),
                 metaData: {
                     segmentId: String(room.index ?? "0"),
-                    name: room.label_name ?? `Room ${room.index ?? 0}`
+                    name: room.label_name ?? `Room ${room.index ?? 0}`,
+                    roomCleaningPreferences: {
+                        times: room.preference_times,
+                        water: room.preference_water,
+                        suction: room.preference_suction
+                    }
                 }
             }));
         }

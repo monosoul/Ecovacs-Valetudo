@@ -1,5 +1,5 @@
 import BaseMap, {MapContainer, MapProps, MapState} from "./BaseMap";
-import {Capability, RawMapEntityType, RawMapLayerMaterial, StatusState} from "../api";
+import {Capability, RawMapEntityType, RawMapLayerMaterial, RawMapLayerType, StatusState} from "../api";
 import {ActionsContainer} from "./Styled";
 import SegmentLabelMapStructure from "./structures/map_structures/SegmentLabelMapStructure";
 import SegmentActions from "./actions/edit_map_actions/SegmentActions";
@@ -33,6 +33,11 @@ interface EditMapProps extends MapProps {
 interface EditMapState extends MapState {
     segmentNames: Record<string, string>,
     segmentMaterials: Record<string, RawMapLayerMaterial>,
+    segmentRoomCleaningPreferences: Record<string, {
+        times?: number;
+        water?: number;
+        suction?: number;
+    } | null>,
     cuttingLine: CuttingLineClientStructure | undefined,
 
     virtualWalls: Array<VirtualWallClientStructure>,
@@ -56,6 +61,7 @@ class EditMap extends BaseMap<EditMapProps, EditMapState> {
 
             segmentNames: {},
             segmentMaterials: {},
+            segmentRoomCleaningPreferences: {},
             cuttingLine: undefined,
 
             virtualWalls: [],
@@ -136,6 +142,16 @@ class EditMap extends BaseMap<EditMapProps, EditMapState> {
 
         const segmentNames = {} as Record<string, string>;
         const segmentMaterials = {} as Record<string, RawMapLayerMaterial>;
+        const segmentRoomCleaningPreferences = {} as Record<string, {
+            times?: number;
+            water?: number;
+            suction?: number;
+        } | null>;
+        this.props.rawMap.layers.forEach(layer => {
+            if (layer.type === RawMapLayerType.Segment && layer.metaData.segmentId !== undefined) {
+                segmentRoomCleaningPreferences[String(layer.metaData.segmentId)] = layer.metaData.roomCleaningPreferences ?? null;
+            }
+        });
         this.structureManager.getMapStructures().forEach(s => {
             if (s.type === SegmentLabelMapStructure.TYPE) {
                 const label = s as SegmentLabelMapStructure;
@@ -149,6 +165,7 @@ class EditMap extends BaseMap<EditMapProps, EditMapState> {
         this.setState({
             segmentNames: segmentNames,
             segmentMaterials: segmentMaterials,
+            segmentRoomCleaningPreferences: segmentRoomCleaningPreferences,
             cuttingLine: this.structureManager.getClientStructures().find(s => {
                 if (s.type === CuttingLineClientStructure.TYPE) {
                     return true;
@@ -340,6 +357,7 @@ class EditMap extends BaseMap<EditMapProps, EditMapState> {
                             selectedSegmentIds={this.state.selectedSegmentIds}
                             segmentNames={this.state.segmentNames}
                             segmentMaterials={this.state.segmentMaterials}
+                            segmentRoomCleaningPreferences={this.state.segmentRoomCleaningPreferences}
                             cuttingLine={this.state.cuttingLine}
                             convertPixelCoordinatesToCMSpace={(coordinates => {
                                 return this.structureManager.convertPixelCoordinatesToCMSpace(coordinates);

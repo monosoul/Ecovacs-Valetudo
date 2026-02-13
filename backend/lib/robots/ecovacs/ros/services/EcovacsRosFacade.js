@@ -320,6 +320,8 @@ class EcovacsRosFacade {
         return {
             header: header,
             rooms: rooms.map(room => {
+                const decoded = preferencesByIndex[room.index]?.decoded;
+
                 return {
                     index: room.index,
                     offset: room.offset,
@@ -329,9 +331,10 @@ class EcovacsRosFacade {
                     metadata_prefix_len: room.metadataPrefixLen,
                     label_id: room.labelId,
                     label_name: labelNameFromId(room.labelId),
-                    preference_slot: preferencesByIndex[room.index]?.slot ?? null,
-                    preference_meta_words_le: preferencesByIndex[room.index]?.meta_words_le ?? [],
-                    preference_meta_hex: preferencesByIndex[room.index]?.meta_hex ?? ""
+                    preference_suction: decoded?.suction_power,
+                    preference_water: decoded?.water_level,
+                    preference_times: decoded?.cleaning_times,
+                    preference_connections: decoded?.connections ?? []
                 };
             }),
             roomPreferences: roomPreferences
@@ -409,8 +412,7 @@ class EcovacsRosFacade {
         const body = await this.spotAreaClient.call(request);
 
         return {
-            header: parseRoomsHeaderOnly(body),
-            response: parseRoomPreferencesResponse(body)
+            header: parseRoomsHeaderOnly(body)
         };
     }
 
@@ -1154,71 +1156,89 @@ function extractRoomPolygonsDeterministic(body, areaCount) {
 }
 
 /**
- * @param {Buffer} body
- * @returns {any}
+ * Extract room preferences from a post-polygon gap or tail buffer.
+ *
+ * Capture-validated structure (pcap byte-diff analysis):
+ *   [connections_count: u32 LE]
+ *   [connections: u32 LE * connections_count]   -- adjacent room indices
+ *   [suction_power: u32 LE]   -- 0=standard, 1=strong, 2=max, 1000=quiet
+ *   [water_level: u32 LE]     -- 0=low, 1=medium, 2=high, 3=ultra_high
+ *   [cleaning_times: u32 LE]  -- 1 or 2
+ *
+ * @param {Buffer} gapData
+ * @returns {{suction_power:number, water_level:number, cleaning_times:number, connections:Array<number>}|null}
  */
-function decodeRoomPreferencesFromGetResponse(body) {
-    const header = parseRoomsHeaderOnly(body);
-    const rooms = extractRoomPolygonsDeterministic(body, header.areaCount);
-    const decodedRooms = rooms.map(room => {
-        const metaStart = room.offset - room.metadataPrefixLen;
-        const meta = body.subarray(metaStart, room.offset);
-        if (meta.length === 0) {
-            return {
-                index: room.index,
-                label_id: room.labelId,
-                slot: null,
-                meta_hex: "",
-                meta_words_le: []
-            };
-        }
-        const slot = meta[0];
-        const core = meta.length >= 2 ? meta.subarray(1, meta.length - 1) : Buffer.alloc(0);
-        const words = [];
-        for (let i = 0; i + 3 < core.length; i += 4) {
-            words.push(core.readUInt32LE(i));
-        }
-
-        return {
-            index: room.index,
-            label_id: room.labelId,
-            slot: slot,
-            meta_hex: meta.toString("hex"),
-            meta_words_le: words
-        };
-    });
-    const selectedRoomTail = parseRoomPreferencesResponse(body);
+function extractPrefsFromGap(gapData) {
+    if (gapData.length < 4) {
+        return null;
+    }
+    const connCount = gapData.readUInt32LE(0);
+    if (connCount > 64) {
+        return null;
+    }
+    const prefOffset = 4 + connCount * 4;
+    if (prefOffset + 12 > gapData.length) {
+        return null;
+    }
+    const suction = gapData.readUInt32LE(prefOffset);
+    const water = gapData.readUInt32LE(prefOffset + 4);
+    const times = gapData.readUInt32LE(prefOffset + 8);
+    const connections = [];
+    for (let i = 0; i < connCount; i++) {
+        connections.push(gapData.readUInt32LE(4 + i * 4));
+    }
 
     return {
-        header: header,
-        selected_room_tail: selectedRoomTail,
-        rooms: decodedRooms
+        suction_power: suction,
+        water_level: water,
+        cleaning_times: times,
+        connections: connections
     };
 }
 
 /**
+ * Decode per-room cleaning preferences from GET_SPOTAREAS response body.
+ *
+ * Key insight: Room N's preferences are stored in the gap AFTER room N's polygon,
+ * not in the metadata before it. For the last room, preferences are in the tail.
+ *
  * @param {Buffer} body
- * @returns {any}
+ * @returns {{header:any, rooms:Array<{index:number, label_id:number, decoded:{suction_power:number,water_level:number,cleaning_times:number,connections:Array<number>}|null}>}}
  */
-function parseRoomPreferencesResponse(body) {
-    if (body.length < 20) {
-        return null;
+function decodeRoomPreferencesFromGetResponse(body) {
+    const header = parseRoomsHeaderOnly(body);
+    const rooms = extractRoomPolygonsDeterministic(body, header.areaCount);
+
+    // Collect raw metadata gaps (bytes before each polygon) and the tail
+    const rawMetas = rooms.map(room => {
+        const metaStart = room.offset - room.metadataPrefixLen;
+        return body.subarray(metaStart, room.offset);
+    });
+
+    // Tail: everything after the last room's polygon
+    let tailBytes = Buffer.alloc(0);
+    if (rooms.length > 0) {
+        const last = rooms[rooms.length - 1];
+        const tailStart = last.offset + 4 + last.pointCount * 8;
+        tailBytes = body.subarray(tailStart);
     }
-    const tail = body.subarray(body.length - 20);
-    const values = [
-        tail.readUInt32BE(0),
-        tail.readUInt32BE(4),
-        tail.readUInt32BE(8),
-        tail.readUInt32BE(12),
-        tail.readUInt32BE(16)
-    ];
+
+    const decodedRooms = rooms.map(room => {
+        // Room N's prefs are in rawMetas[N+1] (next room's gap) or tail (last room)
+        const gap = (room.index + 1 < rawMetas.length) ?
+            rawMetas[room.index + 1] :
+            tailBytes;
+
+        return {
+            index: room.index,
+            label_id: room.labelId,
+            decoded: extractPrefsFromGap(gap)
+        };
+    });
 
     return {
-        room_selector: values[0],
-        cleaning_times: values[1],
-        water_level: values[2],
-        suction_power: values[3],
-        reserved: values[4]
+        header: header,
+        rooms: decodedRooms
     };
 }
 

@@ -1,9 +1,36 @@
+const MapLayer = require("../../../entities/map/MapLayer");
 const MapSegmentationCapability = require("../../../core/capabilities/MapSegmentationCapability");
+const ValetudoMapSegment = require("../../../entities/core/ValetudoMapSegment");
 
 /**
  * @extends MapSegmentationCapability<import("../EcovacsT8AiviValetudoRobot")>
  */
 class EcovacsMapSegmentationCapability extends MapSegmentationCapability {
+    /**
+     * @returns {Promise<Array<import("../../../entities/core/ValetudoMapSegment")>>}
+     */
+    async getSegments() {
+        return this.robot.state.map.layers
+            .filter(layer => {
+                return layer.type === MapLayer.TYPE.SEGMENT;
+            })
+            .map(layer => {
+                let id = layer.metaData.segmentId;
+                if (typeof id === "number") {
+                    id = id.toString();
+                }
+
+                return new ValetudoMapSegment({
+                    id: id,
+                    name: layer.metaData.name,
+                    material: layer.metaData.material,
+                    metaData: {
+                        roomCleaningPreferences: layer.metaData.roomCleaningPreferences ?? null
+                    }
+                });
+            });
+    }
+
     /**
      * @param {Array<import("../../../entities/core/ValetudoMapSegment")>} segments
      * @returns {Promise<void>}
@@ -33,7 +60,10 @@ class EcovacsMapSegmentationCapability extends MapSegmentationCapability {
                 min: 1,
                 max: 1
             },
-            customOrderSupport: false
+            customOrderSupport: false,
+            roomCleaningPreferencesSupport: {
+                enabled: true
+            }
         };
     }
 }

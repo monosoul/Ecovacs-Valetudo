@@ -88,11 +88,21 @@ export interface MapSegmentationProperties {
         max: number;
     };
     customOrderSupport: boolean;
+    roomCleaningPreferencesSupport?: {
+        enabled: boolean;
+    };
 }
 
 export interface Segment {
     id: string;
     name?: string;
+    metaData?: {
+        roomCleaningPreferences?: {
+            times?: number;
+            water?: number;
+            suction?: number;
+        } | null;
+    };
 }
 
 export interface RobotInformation {

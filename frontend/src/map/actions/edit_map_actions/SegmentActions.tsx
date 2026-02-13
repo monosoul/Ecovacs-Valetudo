@@ -1,5 +1,6 @@
 import {
     Capability,
+    useMapSegmentationPropertiesQuery,
     MapSegmentRenameProperties,
     MapSegmentMaterial,
     RawMapLayerMaterial,
@@ -37,6 +38,7 @@ import {
     ContentCut as SplitIcon,
     Dashboard as MaterialIcon,
     JoinFull as JoinIcon,
+    Tune as CleaningPreferencesIcon,
 } from "@mui/icons-material";
 import {AddCuttingLineIcon, RenameIcon} from "../../../components/CustomIcons";
 
@@ -149,6 +151,89 @@ interface SegmentMaterialDialogProps {
     onSubmit: (material: MapSegmentMaterial) => void;
 }
 
+interface SegmentCleaningPreferencesDialogProps {
+    open: boolean;
+    onClose: () => void;
+    segmentName: string;
+    preferences: {
+        times?: number;
+        water?: number;
+        suction?: number;
+    } | null | undefined;
+}
+
+const toTimesLabel = (times?: number): string => {
+    if (times === 1) {
+        return "Normal";
+    }
+    if (times === 2) {
+        return "Deep";
+    }
+
+    return times === undefined ? "Unknown" : String(times);
+};
+
+const toWaterLabel = (water?: number): string => {
+    if (water === 0) {
+        return "Low";
+    }
+    if (water === 1) {
+        return "Medium";
+    }
+    if (water === 2) {
+        return "High";
+    }
+    if (water === 3) {
+        return "Max";
+    }
+
+    return water === undefined ? "Unknown" : String(water);
+};
+
+const toSuctionLabel = (suction?: number): string => {
+    if (suction === 0) {
+        return "Standard";
+    }
+    if (suction === 1) {
+        return "Strong";
+    }
+    if (suction === 2) {
+        return "Max";
+    }
+    if (suction === 1000) {
+        return "Quiet";
+    }
+
+    return suction === undefined ? "Unknown" : String(suction);
+};
+
+const SegmentCleaningPreferencesDialog = (props: SegmentCleaningPreferencesDialogProps) => {
+    const {open, onClose, segmentName, preferences} = props;
+
+    return (
+        <Dialog open={open} onClose={onClose} sx={{userSelect: "none"}}>
+            <DialogTitle>Room Preferences</DialogTitle>
+            <DialogContent>
+                <DialogContentText>
+                    Current per-room cleaning preferences for segment &apos;{segmentName}&apos;.
+                </DialogContentText>
+                <Typography variant="body2" style={{marginTop: "0.75rem"}}>
+                    Clean route (times): {toTimesLabel(preferences?.times)}
+                </Typography>
+                <Typography variant="body2" style={{marginTop: "0.25rem"}}>
+                    Water usage: {toWaterLabel(preferences?.water)}
+                </Typography>
+                <Typography variant="body2" style={{marginTop: "0.25rem"}}>
+                    Fan speed: {toSuctionLabel(preferences?.suction)}
+                </Typography>
+            </DialogContent>
+            <DialogActions>
+                <Button onClick={onClose}>Close</Button>
+            </DialogActions>
+        </Dialog>
+    );
+};
+
 const SegmentMaterialDialog = (props: SegmentMaterialDialogProps) => {
     const {open, onClose, name, currentMaterial, onSubmit} = props;
     const [material, setMaterial] = React.useState<MapSegmentMaterial>(currentMaterial);
@@ -212,6 +297,11 @@ interface SegmentActionsProperties {
     selectedSegmentIds: string[];
     segmentNames: Record<string, string>;
     segmentMaterials: Record<string, RawMapLayerMaterial>;
+    segmentRoomCleaningPreferences: Record<string, {
+        times?: number;
+        water?: number;
+        suction?: number;
+    } | null>;
     cuttingLine: CuttingLineClientStructure | undefined,
 
     convertPixelCoordinatesToCMSpace(coordinates: PointCoordinates): PointCoordinates
@@ -234,6 +324,7 @@ const SegmentActions = (
         selectedSegmentIds,
         segmentNames,
         segmentMaterials,
+        segmentRoomCleaningPreferences,
         cuttingLine,
         convertPixelCoordinatesToCMSpace,
         supportedCapabilities,
@@ -243,6 +334,7 @@ const SegmentActions = (
 
     const [renameDialogOpen, setRenameDialogOpen] = React.useState(false);
     const [materialDialogOpen, setMaterialDialogOpen] = React.useState(false);
+    const [cleaningPreferencesDialogOpen, setCleaningPreferencesDialogOpen] = React.useState(false);
 
     const {
         mutate: joinSegments,
@@ -271,8 +363,13 @@ const SegmentActions = (
     } = useSetSegmentMaterialMutation({
         onSuccess: onClear,
     });
+    const {
+        data: mapSegmentationProperties
+    } = useMapSegmentationPropertiesQuery();
 
     const canEdit = props.robotStatus.value === "docked";
+    const roomCleaningPreferencesSupported = mapSegmentationProperties?.roomCleaningPreferencesSupport?.enabled === true;
+    const selectedSegmentId = selectedSegmentIds[0] ?? "";
 
     const handleSplitClick = React.useCallback(() => {
         if (!canEdit || !cuttingLine || selectedSegmentIds.length !== 1) {
@@ -433,6 +530,25 @@ const SegmentActions = (
                 </Grid2>
             }
             {
+                roomCleaningPreferencesSupported &&
+                selectedSegmentIds.length === 1 &&
+                cuttingLine === undefined &&
+
+                <Grid2>
+                    <ActionButton
+                        color="inherit"
+                        size="medium"
+                        variant="extended"
+                        onClick={() => {
+                            setCleaningPreferencesDialogOpen(true);
+                        }}
+                    >
+                        <CleaningPreferencesIcon style={{marginRight: "0.25rem", marginLeft: "-0.25rem"}}/>
+                        Room Preferences
+                    </ActionButton>
+                </Grid2>
+            }
+            {
                 supportedCapabilities[Capability.MapSegmentEdit] &&
                 selectedSegmentIds.length === 1 &&
                 cuttingLine === undefined &&
@@ -494,6 +610,16 @@ const SegmentActions = (
                     currentName={segmentNames[selectedSegmentIds[0]] ?? selectedSegmentIds[0]}
                     renameProperties={renameProperties ?? {}}
                     onRename={handleRename}
+                />
+            }
+
+            {
+                roomCleaningPreferencesSupported && selectedSegmentIds.length === 1 &&
+                <SegmentCleaningPreferencesDialog
+                    open={cleaningPreferencesDialogOpen}
+                    onClose={() => setCleaningPreferencesDialogOpen(false)}
+                    segmentName={segmentNames[selectedSegmentId] ?? selectedSegmentId}
+                    preferences={segmentRoomCleaningPreferences[selectedSegmentId]}
                 />
             }
 
