@@ -11,6 +11,7 @@ const {
     decodePowerChargeState,
     decodeTaskWorkState
 } = require("../core/TopicStateSubscriber");
+const {labelNameFromId} = require("../../RoomLabels");
 
 const SERVICES = {
     map: {
@@ -1334,31 +1335,6 @@ function encodeFloat32(value) {
  */
 function looksLikeCoord(value) {
     return Number.isFinite(value) && Math.abs(value) <= 20_000;
-}
-
-/**
- * @param {number} labelId
- * @returns {string}
- */
-function labelNameFromId(labelId) {
-    const labels = {
-        1: "living_room",
-        2: "dining_room",
-        3: "bedroom",
-        4: "study",
-        5: "kitchen",
-        6: "bathroom",
-        7: "laundry",
-        8: "lounge",
-        9: "storeroom",
-        10: "kids_room",
-        11: "sunroom",
-        12: "corridor",
-        13: "balcony",
-        14: "gym"
-    };
-
-    return labels[labelId] ?? `label_${labelId}`;
 }
 
 module.exports = EcovacsRosFacade;

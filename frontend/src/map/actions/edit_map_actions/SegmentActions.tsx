@@ -1,10 +1,12 @@
 import {
     Capability,
+    MapSegmentRenameProperties,
     MapSegmentMaterial,
     RawMapLayerMaterial,
     StatusState,
     useJoinSegmentsMutation,
     useMapSegmentMaterialControlPropertiesQuery,
+    useMapSegmentRenamePropertiesQuery,
     useRenameSegmentMutation,
     useSetSegmentMaterialMutation,
     useSplitSegmentMutation
@@ -21,6 +23,7 @@ import {
     FormControl,
     FormControlLabel,
     Grid2,
+    MenuItem,
     Radio,
     RadioGroup,
     TextField,
@@ -58,12 +61,19 @@ interface SegmentRenameDialogProps {
     open: boolean;
     onClose: () => void;
     currentName: string;
+    renameProperties: MapSegmentRenameProperties;
     onRename: (newName: string) => void;
 }
 
 const SegmentRenameDialog = (props: SegmentRenameDialogProps) => {
-    const {open, onClose, currentName, onRename} = props;
+    const {open, onClose, currentName, renameProperties, onRename} = props;
     const [name, setName] = React.useState(currentName);
+    const presetNames = Array.isArray(renameProperties?.presetNames) ? renameProperties.presetNames : [];
+    const usePresetDropdown = presetNames.length > 0;
+    let selectableNames: Array<string> = [];
+    if (usePresetDropdown) {
+        selectableNames = presetNames.includes(currentName) ? presetNames : [currentName, ...presetNames];
+    }
 
     React.useEffect(() => {
         if (open) {
@@ -78,23 +88,44 @@ const SegmentRenameDialog = (props: SegmentRenameDialogProps) => {
                 <DialogContentText>
                     How should the segment &apos;{currentName}&apos; be called?
                 </DialogContentText>
-                <TextField
-                    autoFocus
-                    margin="dense"
-                    variant="standard"
-                    label="Segment name"
-                    fullWidth
-                    value={name}
-                    onChange={(e) => {
-                        setName(e.target.value);
-                    }}
-                    onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                            e.preventDefault();
-                            onRename(name.trim());
-                        }
-                    }}
-                />
+                {
+                    usePresetDropdown ?
+                        <TextField
+                            autoFocus
+                            select
+                            margin="dense"
+                            variant="standard"
+                            label="Segment label"
+                            fullWidth
+                            value={name}
+                            onChange={(e) => {
+                                setName(e.target.value);
+                            }}
+                        >
+                            {selectableNames.map(option => (
+                                <MenuItem key={option} value={option}>
+                                    {option}
+                                </MenuItem>
+                            ))}
+                        </TextField> :
+                        <TextField
+                            autoFocus
+                            margin="dense"
+                            variant="standard"
+                            label="Segment name"
+                            fullWidth
+                            value={name}
+                            onChange={(e) => {
+                                setName(e.target.value);
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    onRename(name.trim());
+                                }
+                            }}
+                        />
+                }
             </DialogContent>
             <DialogActions>
                 <Button onClick={onClose}>Cancel</Button>
@@ -231,6 +262,9 @@ const SegmentActions = (
     } = useRenameSegmentMutation({
         onSuccess: onClear,
     });
+    const {
+        data: renameProperties
+    } = useMapSegmentRenamePropertiesQuery();
     const {
         mutate: setSegmentMaterial,
         isPending: setSegmentMaterialExecuting
@@ -458,6 +492,7 @@ const SegmentActions = (
                     open={renameDialogOpen}
                     onClose={() => setRenameDialogOpen(false)}
                     currentName={segmentNames[selectedSegmentIds[0]] ?? selectedSegmentIds[0]}
+                    renameProperties={renameProperties ?? {}}
                     onRename={handleRename}
                 />
             }

@@ -135,6 +135,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.registerCapability(new capabilities.EcovacsManualControlCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsLocateCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsCarpetModeControlCapability({robot: this}));
+        this.registerCapability(new capabilities.EcovacsMapSegmentRenameCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsMapSegmentationCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsZoneCleaningCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsCombinedVirtualRestrictionsCapability({robot: this}));
@@ -173,8 +174,13 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         const pollStartedAt = Date.now();
 
         try {
-            Logger.debug("Ecovacs map poll: fetching rooms");
-            const roomDump = await this.rosFacade.getRooms(0);
+            const requestedMapId = this.getActiveMapId();
+            Logger.debug(`Ecovacs map poll: fetching rooms (mapId=${requestedMapId})`);
+            let roomDump = await this.rosFacade.getRooms(requestedMapId);
+            if ((!Array.isArray(roomDump?.rooms) || roomDump.rooms.length === 0) && requestedMapId !== 0) {
+                Logger.debug("Ecovacs map poll: rooms empty for active map, retrying with mapId=0");
+                roomDump = await this.rosFacade.getRooms(0);
+            }
             if (Number.isInteger(roomDump?.header?.mapid)) {
                 this.activeMapId = roomDump.header.mapid >>> 0;
             }

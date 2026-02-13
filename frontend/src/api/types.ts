@@ -187,6 +187,10 @@ export interface MapSegmentRenameRequestParameters {
     name: string;
 }
 
+export interface MapSegmentRenameProperties {
+    presetNames?: Array<string>;
+}
+
 export interface MapSegmentMaterialControlRequestParameters {
     segment_id: string;
     material: MapSegmentMaterial;

@@ -32,6 +32,7 @@ import {
     MapSegmentEditSplitRequestParameters,
     MapSegmentMaterialControlProperties,
     MapSegmentMaterialControlRequestParameters,
+    MapSegmentRenameProperties,
     MapSegmentRenameRequestParameters,
     MopDockMopDryingDuration,
     MopDockMopDryingTimeControlProperties,
@@ -369,6 +370,16 @@ export const sendRenameSegmentCommand = async (
             name: parameters.name
         }
     );
+};
+
+export const fetchMapSegmentRenameProperties = async (): Promise<MapSegmentRenameProperties> => {
+    return valetudoAPI
+        .get<MapSegmentRenameProperties>(
+            `/robot/capabilities/${Capability.MapSegmentRename}/properties`
+        )
+        .then(({data}) => {
+            return data;
+        });
 };
 
 export const sendSetSegmentMaterialCommand = async (parameters: MapSegmentMaterialControlRequestParameters): Promise<void> => {

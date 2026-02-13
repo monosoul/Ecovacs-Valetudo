@@ -4,6 +4,7 @@ module.exports = {
     EcovacsCombinedVirtualRestrictionsCapability: require("./EcovacsCombinedVirtualRestrictionsCapability"),
     EcovacsLocateCapability: require("./EcovacsLocateCapability"),
     EcovacsManualControlCapability: require("./EcovacsManualControlCapability"),
+    EcovacsMapSegmentRenameCapability: require("./EcovacsMapSegmentRenameCapability"),
     EcovacsMapSegmentationCapability: require("./EcovacsMapSegmentationCapability"),
     EcovacsZoneCleaningCapability: require("./EcovacsZoneCleaningCapability")
 };
