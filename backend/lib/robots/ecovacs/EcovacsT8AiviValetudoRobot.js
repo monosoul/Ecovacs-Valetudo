@@ -56,6 +56,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.livePositionPollIntervalMs = implementationSpecificConfig.livePositionPollIntervalMs ?? 1500;
         this.livePositionCommandTimeoutMs = implementationSpecificConfig.livePositionCommandTimeoutMs ?? 4000;
         this.powerStatePollIntervalMs = implementationSpecificConfig.powerStatePollIntervalMs ?? 3000;
+        this.cleaningSettingsPollIntervalMs = implementationSpecificConfig.cleaningSettingsPollIntervalMs ?? 30_000;
         this.powerStateStaleAfterMs = implementationSpecificConfig.powerStateStaleAfterMs ?? 300_000;
         this.workStateStaleAfterMs = implementationSpecificConfig.workStateStaleAfterMs ?? 20_000;
         this.runtimeStateCachePath = implementationSpecificConfig.runtimeStateCachePath ?? DEFAULT_RUNTIME_STATE_CACHE_PATH;
@@ -73,6 +74,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.livePositionPollTimer = null;
         this.livePositionPollInFlight = false;
         this.powerStatePollTimer = null;
+        this.cleaningSettingsPollTimer = null;
         this.runtimeStateCache = this.loadRuntimeStateCache();
         this.lastRuntimeStateCacheWriteAt = 0;
         this.runtimeStateCacheWriteTimer = null;
@@ -118,6 +120,14 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             level: batteryLevel,
             flag: batteryFlag
         }));
+        this.state.upsertFirstMatchingAttribute(new stateAttrs.PresetSelectionStateAttribute({
+            type: stateAttrs.PresetSelectionStateAttribute.TYPE.FAN_SPEED,
+            value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.LOW
+        }));
+        this.state.upsertFirstMatchingAttribute(new stateAttrs.PresetSelectionStateAttribute({
+            type: stateAttrs.PresetSelectionStateAttribute.TYPE.WATER_GRADE,
+            value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.MEDIUM
+        }));
         this.setStatus(initialStatus);
         this.state.upsertFirstMatchingAttribute(new stateAttrs.DockStatusStateAttribute({
             value: statusToDockStatus(initialStatus)
@@ -136,6 +146,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.registerCapability(new capabilities.EcovacsManualControlCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsLocateCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsCarpetModeControlCapability({robot: this}));
+        this.registerCapability(new capabilities.EcovacsCleanRouteControlCapability({robot: this}));
+        this.registerCapability(new capabilities.EcovacsFanSpeedControlCapability({robot: this}));
+        this.registerCapability(new capabilities.EcovacsWaterUsageControlCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsMapSegmentEditCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsMapSegmentRenameCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsMapSegmentationCapability({robot: this}));
@@ -167,6 +180,10 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.powerStatePollTimer = setInterval(() => {
             this.refreshRuntimeState();
         }, this.powerStatePollIntervalMs);
+        this.cleaningSettingsPollTimer = setInterval(() => {
+            void this.refreshCleaningSettingsState();
+        }, this.cleaningSettingsPollIntervalMs);
+        void this.refreshCleaningSettingsState();
     }
 
     /**
@@ -536,6 +553,10 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         if (this.powerStatePollTimer) {
             clearInterval(this.powerStatePollTimer);
             this.powerStatePollTimer = null;
+        }
+        if (this.cleaningSettingsPollTimer) {
+            clearInterval(this.cleaningSettingsPollTimer);
+            this.cleaningSettingsPollTimer = null;
         }
         if (this.runtimeStateCacheWriteTimer) {
             clearTimeout(this.runtimeStateCacheWriteTimer);
@@ -1085,6 +1106,49 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             }
         } catch (e) {
             Logger.debug(`Ecovacs runtime state refresh failed: ${e?.message ?? e}`);
+        }
+    }
+
+    /**
+     * @returns {Promise<void>}
+     */
+    async refreshCleaningSettingsState() {
+        try {
+            const [fanRaw, waterLevelRaw] = await Promise.all([
+                this.rosFacade.getFanMode(),
+                this.rosFacade.getWaterLevel()
+            ]);
+            const fanPreset = fanLevelToPresetValue(fanRaw?.mode, fanRaw?.isSilent);
+            const waterPreset = waterLevelToPresetValue(waterLevelRaw);
+
+            let changed = false;
+            const currentFan = this.state.getFirstMatchingAttribute(
+                attribute => {
+                    return attribute instanceof stateAttrs.PresetSelectionStateAttribute &&
+                        attribute.type === stateAttrs.PresetSelectionStateAttribute.TYPE.FAN_SPEED;
+                }
+            );
+            if (currentFan?.value !== fanPreset.value || currentFan?.customValue !== fanPreset.customValue) {
+                changed = true;
+            }
+            this.state.upsertFirstMatchingAttribute(new stateAttrs.PresetSelectionStateAttribute(fanPreset));
+
+            const currentWater = this.state.getFirstMatchingAttribute(
+                attribute => {
+                    return attribute instanceof stateAttrs.PresetSelectionStateAttribute &&
+                        attribute.type === stateAttrs.PresetSelectionStateAttribute.TYPE.WATER_GRADE;
+                }
+            );
+            if (currentWater?.value !== waterPreset.value || currentWater?.customValue !== waterPreset.customValue) {
+                changed = true;
+            }
+            this.state.upsertFirstMatchingAttribute(new stateAttrs.PresetSelectionStateAttribute(waterPreset));
+
+            if (changed) {
+                this.emitStateAttributesUpdated();
+            }
+        } catch (e) {
+            Logger.debug(`Ecovacs settings state refresh failed: ${e?.message ?? e}`);
         }
     }
 
@@ -2149,6 +2213,86 @@ function statusToDockStatus(statusValue) {
     }
 
     return stateAttrs.DockStatusStateAttribute.VALUE.IDLE;
+}
+
+/**
+ * @param {number} level
+ * @param {number} isSilent
+ * @returns {{type:string,value:string,customValue?:number}}
+ */
+function fanLevelToPresetValue(level, isSilent) {
+    const fanLevel = Number(level);
+    const silent = Number(isSilent) > 0;
+    const presetType = stateAttrs.PresetSelectionStateAttribute.TYPE.FAN_SPEED;
+    if (silent) {
+        return {
+            type: presetType,
+            value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.OFF
+        };
+    }
+    if (fanLevel === 0) {
+        return {
+            type: presetType,
+            value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.LOW
+        };
+    }
+    if (fanLevel === 1) {
+        return {
+            type: presetType,
+            value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.HIGH
+        };
+    }
+    if (fanLevel === 2) {
+        return {
+            type: presetType,
+            value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.MAX
+        };
+    }
+
+    return {
+        type: presetType,
+        value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.CUSTOM,
+        customValue: Number.isFinite(fanLevel) ? fanLevel : 0
+    };
+}
+
+/**
+ * @param {number} level
+ * @returns {{type:string,value:string,customValue?:number}}
+ */
+function waterLevelToPresetValue(level) {
+    const waterLevel = Number(level);
+    const presetType = stateAttrs.PresetSelectionStateAttribute.TYPE.WATER_GRADE;
+    if (waterLevel === 0) {
+        return {
+            type: presetType,
+            value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.LOW
+        };
+    }
+    if (waterLevel === 1) {
+        return {
+            type: presetType,
+            value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.MEDIUM
+        };
+    }
+    if (waterLevel === 2) {
+        return {
+            type: presetType,
+            value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.HIGH
+        };
+    }
+    if (waterLevel === 3) {
+        return {
+            type: presetType,
+            value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.MAX
+        };
+    }
+
+    return {
+        type: presetType,
+        value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.CUSTOM,
+        customValue: Number.isFinite(waterLevel) ? waterLevel : 0
+    };
 }
 
 /**

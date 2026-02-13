@@ -68,7 +68,10 @@ const SETTING_MANAGE_TYPE = {
 };
 
 const SETTING_TYPE = {
+    WATER_LEVEL: 6,
+    FAN_LEVEL: 7,
     ROOM_PREFERENCES: 14,
+    CLEANING_TIMES: 15,
     SUCTION_BOOST_ON_CARPET: 8
 };
 
@@ -714,6 +717,37 @@ class EcovacsRosFacade {
     }
 
     /**
+     * @returns {Promise<{mode:number,isSilent:number}>}
+     */
+    async getFanMode() {
+        const request = serializeSettingManageRequest({
+            manageType: SETTING_MANAGE_TYPE.GET,
+            settingType: SETTING_TYPE.FAN_LEVEL
+        });
+        const body = await this.settingClient.call(request);
+        const parsed = parseSettingManageResponse(body);
+
+        return {
+            mode: parsed.fanMode,
+            isSilent: parsed.fanIsSilent
+        };
+    }
+
+    /**
+     * @returns {Promise<number>}
+     */
+    async getWaterLevel() {
+        const request = serializeSettingManageRequest({
+            manageType: SETTING_MANAGE_TYPE.GET,
+            settingType: SETTING_TYPE.WATER_LEVEL
+        });
+        const body = await this.settingClient.call(request);
+        const parsed = parseSettingManageResponse(body);
+
+        return parsed.waterLevel;
+    }
+
+    /**
      * @returns {Promise<"on"|"off">}
      */
     async getRoomPreferencesEnabled() {
@@ -725,6 +759,20 @@ class EcovacsRosFacade {
         const parsed = parseSettingManageResponse(body);
 
         return parsed.autoCollect === 1 ? "on" : "off";
+    }
+
+    /**
+     * @returns {Promise<number>}
+     */
+    async getCleaningTimesPasses() {
+        const request = serializeSettingManageRequest({
+            manageType: SETTING_MANAGE_TYPE.GET,
+            settingType: SETTING_TYPE.CLEANING_TIMES
+        });
+        const body = await this.settingClient.call(request);
+        const parsed = parseSettingManageResponse(body);
+
+        return parsed.autoCollect;
     }
 
     /**
@@ -745,6 +793,57 @@ class EcovacsRosFacade {
     }
 
     /**
+     * @returns {Promise<number>}
+     */
+    async getFanLevel() {
+        const fan = await this.getFanMode();
+
+        return fan.mode;
+    }
+
+    /**
+     * @param {number} level
+     * @returns {Promise<number>}
+     */
+    async setFanLevel(level) {
+        return await this.setFanMode(level, 0);
+    }
+
+    /**
+     * @param {number} level
+     * @param {number} [isSilent]
+     * @returns {Promise<number>}
+     */
+    async setFanMode(level, isSilent = 0) {
+        const request = serializeSettingManageRequest({
+            manageType: SETTING_MANAGE_TYPE.SET,
+            settingType: SETTING_TYPE.FAN_LEVEL,
+            fanMode: level,
+            fanIsSilent: isSilent
+        });
+        const body = await this.settingClient.call(request);
+        const parsed = parseSettingManageResponse(body);
+
+        return parsed.response;
+    }
+
+    /**
+     * @param {number} level
+     * @returns {Promise<number>}
+     */
+    async setWaterLevel(level) {
+        const request = serializeSettingManageRequest({
+            manageType: SETTING_MANAGE_TYPE.SET,
+            settingType: SETTING_TYPE.WATER_LEVEL,
+            waterLevel: level
+        });
+        const body = await this.settingClient.call(request);
+        const parsed = parseSettingManageResponse(body);
+
+        return parsed.response;
+    }
+
+    /**
      * @param {"on"|"off"} value
      * @returns {Promise<number>}
      */
@@ -753,6 +852,22 @@ class EcovacsRosFacade {
             manageType: SETTING_MANAGE_TYPE.SET,
             settingType: SETTING_TYPE.ROOM_PREFERENCES,
             autoCollectVal: value === "on" ? 1 : 0
+        });
+        const body = await this.settingClient.call(request);
+        const parsed = parseSettingManageResponse(body);
+
+        return parsed.response;
+    }
+
+    /**
+     * @param {number} passes
+     * @returns {Promise<number>}
+     */
+    async setCleaningTimesPasses(passes) {
+        const request = serializeSettingManageRequest({
+            manageType: SETTING_MANAGE_TYPE.SET,
+            settingType: SETTING_TYPE.CLEANING_TIMES,
+            autoCollectVal: passes
         });
         const body = await this.settingClient.call(request);
         const parsed = parseSettingManageResponse(body);
@@ -1067,7 +1182,7 @@ function parseWorkManageResponse(body) {
 
 /**
  * @param {Buffer} body
- * @returns {{response:number,settingType:number,customSettingVal:number,autoCollect:number}}
+ * @returns {{response:number,settingType:number,customSettingVal:number,waterLevel:number,fanMode:number,fanIsSilent:number,autoCollect:number}}
  */
 function parseSettingManageResponse(body) {
     const cursor = new BinaryCursor(body);
@@ -1075,7 +1190,11 @@ function parseSettingManageResponse(body) {
     const settingType = cursor.readUInt8();
     const customType = cursor.readUInt8();
     const customSettingVal = cursor.readUInt8();
-    cursor.readBuffer(20); // remainder of 24-byte fixed block
+    cursor.readBuffer(16); // blocktime + mop mode
+    const waterLevel = cursor.readUInt8(); // waterLevel.level
+    const fanMode = cursor.readUInt8(); // fanMode.mode
+    const fanIsSilent = cursor.readUInt8(); // fanMode.isSilent
+    cursor.readUInt8(); // aiSetting.isOn
     const aiSettingValsLength = cursor.readUInt32LE();
     cursor.readBuffer(aiSettingValsLength);
     cursor.readBuffer(8); // mop change + notice time
@@ -1087,6 +1206,9 @@ function parseSettingManageResponse(body) {
         settingType: settingType,
         customType: customType,
         customSettingVal: customSettingVal,
+        waterLevel: waterLevel,
+        fanMode: fanMode,
+        fanIsSilent: fanIsSilent,
         autoCollect: autoCollect
     };
 }
@@ -1276,6 +1398,9 @@ function serializeVirtualWallRequest(options) {
  * @param {number} options.settingType
  * @param {number} [options.customSettingType]
  * @param {number} [options.customSettingVal]
+ * @param {number} [options.waterLevel]
+ * @param {number} [options.fanMode]
+ * @param {number} [options.fanIsSilent]
  * @param {number} [options.autoCollectVal]
  * @returns {Buffer}
  */
@@ -1285,6 +1410,9 @@ function serializeSettingManageRequest(options) {
     fixed.writeUInt8(options.settingType & 0xff, 1);
     fixed.writeUInt8((options.customSettingType ?? 0) & 0xff, 2);
     fixed.writeUInt8((options.customSettingVal ?? 0) & 0xff, 3);
+    fixed.writeUInt8((options.waterLevel ?? 0) & 0xff, 20);
+    fixed.writeUInt8((options.fanMode ?? 0) & 0xff, 21);
+    fixed.writeUInt8((options.fanIsSilent ?? 0) & 0xff, 22);
 
     const aiSettingVals = Buffer.alloc(5, 0);
     const aiLen = encodeUInt32(aiSettingVals.length);
