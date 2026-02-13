@@ -38,6 +38,23 @@ class MapSegmentationCapabilityRouter extends CapabilityRouter {
                 } else {
                     res.sendStatus(400);
                 }
+            } else if (req.body.action === "set_room_cleaning_sequence") {
+                if (
+                    typeof req.body.sequence === "object" &&
+                    req.body.sequence !== null &&
+                    !Array.isArray(req.body.sequence) &&
+                    typeof this.capability.setRoomCleaningSequence === "function"
+                ) {
+                    try {
+                        await this.capability.setRoomCleaningSequence(req.body.sequence);
+
+                        res.sendStatus(200);
+                    } catch (e) {
+                        this.sendErrorResponse(req, res, e);
+                    }
+                } else {
+                    res.sendStatus(400);
+                }
             } else if (req.body.action === "set_room_cleaning_preferences") {
                 if (
                     typeof req.body.segment_id === "string" &&

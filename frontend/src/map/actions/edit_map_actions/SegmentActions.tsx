@@ -2,6 +2,7 @@ import {
     Capability,
     useMapSegmentationPropertiesQuery,
     useSetRoomCleaningPreferencesMutation,
+    useSetRoomCleaningSequenceMutation,
     MapSegmentRenameProperties,
     MapSegmentMaterial,
     RawMapLayerMaterial,
@@ -14,6 +15,7 @@ import {
     useSplitSegmentMutation
 } from "../../../api";
 import SegmentCleaningPreferencesDialog from "./SegmentCleaningPreferencesDialog";
+import SegmentCleaningSequenceDialog from "./SegmentCleaningSequenceDialog";
 import React from "react";
 import {
     Button,
@@ -39,6 +41,7 @@ import {
     Clear as ClearIcon,
     ContentCut as SplitIcon,
     Dashboard as MaterialIcon,
+    FormatListNumbered as SequenceIcon,
     JoinFull as JoinIcon,
     Tune as CleaningPreferencesIcon,
 } from "@mui/icons-material";
@@ -221,6 +224,7 @@ interface SegmentActionsProperties {
         water?: number;
         suction?: number;
     } | null>;
+    segmentRoomCleaningSequences: Record<string, number>;
     cuttingLine: CuttingLineClientStructure | undefined,
 
     convertPixelCoordinatesToCMSpace(coordinates: PointCoordinates): PointCoordinates
@@ -244,6 +248,7 @@ const SegmentActions = (
         segmentNames,
         segmentMaterials,
         segmentRoomCleaningPreferences,
+        segmentRoomCleaningSequences,
         cuttingLine,
         convertPixelCoordinatesToCMSpace,
         supportedCapabilities,
@@ -254,6 +259,7 @@ const SegmentActions = (
     const [renameDialogOpen, setRenameDialogOpen] = React.useState(false);
     const [materialDialogOpen, setMaterialDialogOpen] = React.useState(false);
     const [cleaningPreferencesDialogOpen, setCleaningPreferencesDialogOpen] = React.useState(false);
+    const [cleaningSequenceDialogOpen, setCleaningSequenceDialogOpen] = React.useState(false);
 
     const {
         mutate: joinSegments,
@@ -291,6 +297,14 @@ const SegmentActions = (
     } = useSetRoomCleaningPreferencesMutation({
         onSuccess: () => {
             setCleaningPreferencesDialogOpen(false);
+        },
+    });
+    const {
+        mutate: setRoomCleaningSequence,
+        isPending: setRoomCleaningSequencePending
+    } = useSetRoomCleaningSequenceMutation({
+        onSuccess: () => {
+            setCleaningSequenceDialogOpen(false);
         },
     });
 
@@ -360,6 +374,10 @@ const SegmentActions = (
             times: prefs.times
         });
     }, [setRoomCleaningPreferences, selectedSegmentIds]);
+
+    const handleSetRoomCleaningSequence = React.useCallback((sequence: Record<string, number>) => {
+        setRoomCleaningSequence({sequence: sequence});
+    }, [setRoomCleaningSequence]);
 
 
     return (
@@ -488,6 +506,24 @@ const SegmentActions = (
                 </Grid2>
             }
             {
+                roomCleaningPreferencesSupported &&
+                cuttingLine === undefined &&
+
+                <Grid2>
+                    <ActionButton
+                        color="inherit"
+                        size="medium"
+                        variant="extended"
+                        onClick={() => {
+                            setCleaningSequenceDialogOpen(true);
+                        }}
+                    >
+                        <SequenceIcon style={{marginRight: "0.25rem", marginLeft: "-0.25rem"}}/>
+                        Cleaning Order
+                    </ActionButton>
+                </Grid2>
+            }
+            {
                 supportedCapabilities[Capability.MapSegmentEdit] &&
                 selectedSegmentIds.length === 1 &&
                 cuttingLine === undefined &&
@@ -572,6 +608,18 @@ const SegmentActions = (
                     name={segmentNames[selectedSegmentIds[0]] ?? selectedSegmentIds[0]}
                     currentMaterial={segmentMaterials[selectedSegmentIds[0]] as unknown as MapSegmentMaterial ?? MapSegmentMaterial.Generic}
                     onSubmit={handleSetMaterial}
+                />
+            }
+
+            {
+                roomCleaningPreferencesSupported &&
+                <SegmentCleaningSequenceDialog
+                    open={cleaningSequenceDialogOpen}
+                    onClose={() => setCleaningSequenceDialogOpen(false)}
+                    segmentNames={segmentNames}
+                    segmentSequences={segmentRoomCleaningSequences}
+                    onSave={handleSetRoomCleaningSequence}
+                    isSaving={setRoomCleaningSequencePending}
                 />
             }
         </Grid2>

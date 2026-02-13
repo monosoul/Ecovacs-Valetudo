@@ -84,7 +84,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.tracePathPointsMm = [];
         this.lastTraceEndIdx = -1;
         this.lastTraceMapId = null;
-        /** @type {Object<string, {suction: number, water: number, times: number}>} */
+        /** @type {Object<string, {suction: number, water: number, times: number, sequence: number}>} */
         this.cachedRoomCleaningPreferences = {};
         this.activeMapId = 0;
         this.tracePathWarningShown = false;
@@ -231,6 +231,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                         suction: room.preference_suction,
                         water: room.preference_water,
                         times: room.preference_times,
+                        sequence: room.preference_sequence ?? 0,
                     };
                 }
             }
@@ -619,6 +620,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 preference_times: room.preference_times ?? cached.times,
                 preference_water: room.preference_water ?? cached.water,
                 preference_suction: room.preference_suction ?? cached.suction,
+                preference_sequence: room.preference_sequence ?? cached.sequence ?? 0,
                 polygonCm: polygon.map(point => {
                     return {
                         x: Math.round(Number(point[0]) / 10),
@@ -671,7 +673,8 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                         times: room.preference_times,
                         water: room.preference_water,
                         suction: room.preference_suction
-                    }
+                    },
+                    roomCleaningSequence: room.preference_sequence ?? 0
                 }
             }));
         });
@@ -855,7 +858,8 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                         times: room.preference_times ?? cachedPrefs.times,
                         water: room.preference_water ?? cachedPrefs.water,
                         suction: room.preference_suction ?? cachedPrefs.suction
-                    }
+                    },
+                    roomCleaningSequence: room.preference_sequence ?? cachedPrefs.sequence ?? 0
                 }
             }));
         }

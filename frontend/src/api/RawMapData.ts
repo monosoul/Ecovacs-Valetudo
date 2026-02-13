@@ -51,6 +51,7 @@ export interface RawMapLayerMetaData {
         water?: number;
         suction?: number;
     } | null;
+    roomCleaningSequence?: number;
 }
 
 export enum RawMapLayerType {

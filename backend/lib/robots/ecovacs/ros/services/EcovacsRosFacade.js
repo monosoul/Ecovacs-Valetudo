@@ -14,6 +14,7 @@ const {
 const {labelNameFromId} = require("../../RoomLabels");
 
 const SPOT_AREA_ROOM_PREFS_TYPE = 4;
+const SPOT_AREA_SEQUENCE_TYPE = 5;
 
 const SERVICES = {
     map: {
@@ -336,6 +337,7 @@ class EcovacsRosFacade {
                     preference_suction: decoded?.suction_power,
                     preference_water: decoded?.water_level,
                     preference_times: decoded?.cleaning_times,
+                    preference_sequence: decoded?.sequence_position ?? 0,
                     preference_connections: decoded?.connections ?? []
                 };
             }),
@@ -411,6 +413,22 @@ class EcovacsRosFacade {
      */
     async setRoomCleaningPreferences(mapId, roomId, cleaningTimes, waterLevel, suctionPower) {
         const request = buildRoomPreferencesRequest(mapId, roomId, cleaningTimes, waterLevel, suctionPower);
+        const body = await this.spotAreaClient.call(request);
+
+        return {
+            header: parseRoomsHeaderOnly(body)
+        };
+    }
+
+    /**
+     * Set room cleaning sequence/order.
+     *
+     * @param {number} mapId
+     * @param {Array<{roomIndex:number, position:number}>} sequence
+     * @returns {Promise<{header:any}>}
+     */
+    async setRoomCleaningSequence(mapId, sequence) {
+        const request = buildRoomSequenceRequest(mapId, sequence);
         const body = await this.spotAreaClient.call(request);
 
         return {
@@ -1168,7 +1186,7 @@ function extractRoomPolygonsDeterministic(body, areaCount) {
  *   [cleaning_times: u32 LE]  -- 1 or 2
  *
  * @param {Buffer} gapData
- * @returns {{suction_power:number, water_level:number, cleaning_times:number, connections:Array<number>}|null}
+ * @returns {{suction_power:number, water_level:number, cleaning_times:number, sequence_position:number, connections:Array<number>}|null}
  */
 function extractPrefsFromGap(gapData) {
     if (gapData.length < 4) {
@@ -1185,6 +1203,9 @@ function extractPrefsFromGap(gapData) {
     const suction = gapData.readUInt32LE(prefOffset);
     const water = gapData.readUInt32LE(prefOffset + 4);
     const times = gapData.readUInt32LE(prefOffset + 8);
+    // Sequence position is a u8 immediately after cleaning_times
+    const seqOffset = prefOffset + 12;
+    const sequencePosition = seqOffset < gapData.length ? gapData.readUInt8(seqOffset) : 0;
     const connections = [];
     for (let i = 0; i < connCount; i++) {
         connections.push(gapData.readUInt32LE(4 + i * 4));
@@ -1194,6 +1215,7 @@ function extractPrefsFromGap(gapData) {
         suction_power: suction,
         water_level: water,
         cleaning_times: times,
+        sequence_position: sequencePosition,
         connections: connections
     };
 }
@@ -1511,6 +1533,32 @@ function buildRoomPreferencesRequest(mapId, roomId, cleaningTimes, waterLevel, s
     body.writeUInt32LE(waterLevel >>> 0, 38);             // water_level
     body.writeUInt32LE(cleaningTimes >>> 0, 42);          // cleaning_times
     // byte 46: zero (padding)
+
+    return body;
+}
+
+/**
+ * Build room cleaning sequence/order SET request (type=5).
+ *
+ * Header (17 bytes): type=5, mapid, 8 zeros, room_count
+ * Room block (30 bytes each): room_index(u8) + 28 zeros + sequence_position(u8)
+ *
+ * @param {number} mapId
+ * @param {Array<{roomIndex:number, position:number}>} sequence - position is 1-based (0 = not in sequence)
+ * @returns {Buffer}
+ */
+function buildRoomSequenceRequest(mapId, sequence) {
+    const roomCount = sequence.length;
+    const body = Buffer.alloc(17 + roomCount * 30);
+    body.writeUInt8(SPOT_AREA_SEQUENCE_TYPE, 0);
+    body.writeUInt32LE(mapId >>> 0, 1);
+    // bytes 5..12: zeros
+    body.writeUInt32LE(roomCount, 13);
+    for (let i = 0; i < roomCount; i++) {
+        const offset = 17 + i * 30;
+        body.writeUInt8(sequence[i].roomIndex & 0xFF, offset);
+        body.writeUInt8(sequence[i].position & 0xFF, offset + 29);
+    }
 
     return body;
 }

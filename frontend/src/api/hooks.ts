@@ -56,6 +56,7 @@ import {
     sendCarpetModeEnable,
     sendCleanSegmentsCommand,
     sendSetRoomCleaningPreferencesCommand,
+    sendSetRoomCleaningSequenceCommand,
     sendCleanZonesCommand,
     sendCombinedVirtualRestrictionsUpdate,
     sendConsumableReset,
@@ -172,6 +173,7 @@ import {
     ManualControlInteraction,
     MapSegmentationActionRequestParameters,
     RoomCleaningPreferencesRequestParameters,
+    RoomCleaningSequenceRequestParameters,
     MapSegmentEditJoinRequestParameters,
     MapSegmentEditSplitRequestParameters,
     MapSegmentMaterialControlRequestParameters,
@@ -571,6 +573,19 @@ export const useSetRoomCleaningPreferencesMutation = (
     return useMutation({
         mutationFn: (parameters: RoomCleaningPreferencesRequestParameters) => {
             return sendSetRoomCleaningPreferencesCommand(parameters);
+        },
+        ...options,
+
+        onError: useOnCommandError(Capability.MapSegmentation),
+    });
+};
+
+export const useSetRoomCleaningSequenceMutation = (
+    options?: UseMutationOptions<void, unknown, RoomCleaningSequenceRequestParameters>
+) => {
+    return useMutation({
+        mutationFn: (parameters: RoomCleaningSequenceRequestParameters) => {
+            return sendSetRoomCleaningSequenceCommand(parameters);
         },
         ...options,
 

@@ -38,6 +38,7 @@ interface EditMapState extends MapState {
         water?: number;
         suction?: number;
     } | null>,
+    segmentRoomCleaningSequences: Record<string, number>,
     cuttingLine: CuttingLineClientStructure | undefined,
 
     virtualWalls: Array<VirtualWallClientStructure>,
@@ -62,6 +63,7 @@ class EditMap extends BaseMap<EditMapProps, EditMapState> {
             segmentNames: {},
             segmentMaterials: {},
             segmentRoomCleaningPreferences: {},
+            segmentRoomCleaningSequences: {},
             cuttingLine: undefined,
 
             virtualWalls: [],
@@ -147,9 +149,11 @@ class EditMap extends BaseMap<EditMapProps, EditMapState> {
             water?: number;
             suction?: number;
         } | null>;
+        const segmentRoomCleaningSequences = {} as Record<string, number>;
         this.props.rawMap.layers.forEach(layer => {
             if (layer.type === RawMapLayerType.Segment && layer.metaData.segmentId !== undefined) {
                 segmentRoomCleaningPreferences[String(layer.metaData.segmentId)] = layer.metaData.roomCleaningPreferences ?? null;
+                segmentRoomCleaningSequences[String(layer.metaData.segmentId)] = layer.metaData.roomCleaningSequence ?? 0;
             }
         });
         this.structureManager.getMapStructures().forEach(s => {
@@ -166,6 +170,7 @@ class EditMap extends BaseMap<EditMapProps, EditMapState> {
             segmentNames: segmentNames,
             segmentMaterials: segmentMaterials,
             segmentRoomCleaningPreferences: segmentRoomCleaningPreferences,
+            segmentRoomCleaningSequences: segmentRoomCleaningSequences,
             cuttingLine: this.structureManager.getClientStructures().find(s => {
                 if (s.type === CuttingLineClientStructure.TYPE) {
                     return true;
@@ -358,6 +363,7 @@ class EditMap extends BaseMap<EditMapProps, EditMapState> {
                             segmentNames={this.state.segmentNames}
                             segmentMaterials={this.state.segmentMaterials}
                             segmentRoomCleaningPreferences={this.state.segmentRoomCleaningPreferences}
+                            segmentRoomCleaningSequences={this.state.segmentRoomCleaningSequences}
                             cuttingLine={this.state.cuttingLine}
                             convertPixelCoordinatesToCMSpace={(coordinates => {
                                 return this.structureManager.convertPixelCoordinatesToCMSpace(coordinates);

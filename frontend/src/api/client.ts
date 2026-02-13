@@ -29,6 +29,7 @@ import {
     MapSegmentationActionRequestParameters,
     MapSegmentationProperties,
     RoomCleaningPreferencesRequestParameters,
+    RoomCleaningSequenceRequestParameters,
     MapSegmentEditJoinRequestParameters,
     MapSegmentEditSplitRequestParameters,
     MapSegmentMaterialControlProperties,
@@ -344,6 +345,18 @@ export const sendSetRoomCleaningPreferencesCommand = async (
             suction: parameters.suction,
             water: parameters.water,
             times: parameters.times
+        }
+    );
+};
+
+export const sendSetRoomCleaningSequenceCommand = async (
+    parameters: RoomCleaningSequenceRequestParameters
+): Promise<void> => {
+    await valetudoAPI.put(
+        `/robot/capabilities/${Capability.MapSegmentation}`,
+        {
+            action: "set_room_cleaning_sequence",
+            sequence: parameters.sequence
         }
     );
 };

@@ -188,6 +188,10 @@ export interface RoomCleaningPreferencesRequestParameters {
     times: number;
 }
 
+export interface RoomCleaningSequenceRequestParameters {
+    sequence: Record<string, number>;
+}
+
 export interface MapSegmentEditJoinRequestParameters {
     segment_a_id: string;
     segment_b_id: string;

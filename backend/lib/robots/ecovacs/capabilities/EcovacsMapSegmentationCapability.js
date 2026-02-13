@@ -34,7 +34,8 @@ class EcovacsMapSegmentationCapability extends MapSegmentationCapability {
                             suction: layerPrefs?.suction ?? cachedPrefs.suction,
                             water: layerPrefs?.water ?? cachedPrefs.water,
                             times: layerPrefs?.times ?? cachedPrefs.times,
-                        }
+                        },
+                        roomCleaningSequence: layer.metaData.roomCleaningSequence ?? cachedPrefs.sequence ?? 0
                     }
                 });
             });
@@ -68,6 +69,63 @@ class EcovacsMapSegmentationCapability extends MapSegmentationCapability {
         };
 
         // Trigger a map poll so the map layers also get refreshed
+        this.robot.pollMap();
+    }
+
+    /**
+     * Set room cleaning sequence/order.
+     *
+     * @param {Object<string, number>} sequenceMap - map of segmentId -> position (1-based, 0 = not in sequence)
+     * @returns {Promise<void>}
+     */
+    async setRoomCleaningSequence(sequenceMap) {
+        const mapId = this.robot.getActiveMapId();
+
+        // Validate: no duplicate non-zero positions
+        const usedPositions = new Set();
+        for (const [segmentId, position] of Object.entries(sequenceMap)) {
+            const pos = Number(position);
+            if (!Number.isInteger(pos) || pos < 0 || pos > 255) {
+                throw new Error(`Invalid sequence position for segment ${segmentId}: ${position}`);
+            }
+            if (pos > 0) {
+                if (usedPositions.has(pos)) {
+                    throw new Error(`Duplicate sequence position: ${pos}`);
+                }
+                usedPositions.add(pos);
+            }
+        }
+
+        // Build the full sequence array for all rooms
+        const sequence = Object.entries(sequenceMap).map(([segmentId, position]) => {
+            const roomIndex = Number.parseInt(segmentId, 10);
+            if (!Number.isInteger(roomIndex) || roomIndex < 0 || roomIndex > 255) {
+                throw new Error(`Invalid Ecovacs room id: ${segmentId}`);
+            }
+
+            return {
+                roomIndex: roomIndex,
+                position: Number(position)
+            };
+        });
+
+        await this.robot.rosFacade.setRoomCleaningSequence(mapId, sequence);
+
+        // Update cache
+        for (const entry of sequence) {
+            const key = String(entry.roomIndex);
+            if (this.robot.cachedRoomCleaningPreferences[key]) {
+                this.robot.cachedRoomCleaningPreferences[key].sequence = entry.position;
+            } else {
+                this.robot.cachedRoomCleaningPreferences[key] = {
+                    suction: undefined,
+                    water: undefined,
+                    times: undefined,
+                    sequence: entry.position,
+                };
+            }
+        }
+
         this.robot.pollMap();
     }
 
