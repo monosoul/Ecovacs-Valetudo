@@ -32,6 +32,30 @@ class EcovacsMapSegmentationCapability extends MapSegmentationCapability {
     }
 
     /**
+     * @param {string} segmentId
+     * @param {{suction: number, water: number, times: number}} preferences
+     * @returns {Promise<void>}
+     */
+    async setRoomCleaningPreferences(segmentId, preferences) {
+        const roomId = Number.parseInt(segmentId, 10);
+        if (!Number.isInteger(roomId) || roomId < 0 || roomId > 255) {
+            throw new Error(`Invalid Ecovacs room id: ${segmentId}`);
+        }
+        const mapId = this.robot.getActiveMapId();
+
+        await this.robot.rosFacade.setRoomCleaningPreferences(
+            mapId,
+            roomId,
+            preferences.times,
+            preferences.water,
+            preferences.suction
+        );
+
+        // Trigger a map poll so the UI reflects updated preferences
+        this.robot.pollMap();
+    }
+
+    /**
      * @param {Array<import("../../../entities/core/ValetudoMapSegment")>} segments
      * @returns {Promise<void>}
      */

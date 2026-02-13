@@ -55,6 +55,7 @@ import {
     sendBasicControlCommand,
     sendCarpetModeEnable,
     sendCleanSegmentsCommand,
+    sendSetRoomCleaningPreferencesCommand,
     sendCleanZonesCommand,
     sendCombinedVirtualRestrictionsUpdate,
     sendConsumableReset,
@@ -170,6 +171,7 @@ import {
     HTTPBasicAuthConfiguration,
     ManualControlInteraction,
     MapSegmentationActionRequestParameters,
+    RoomCleaningPreferencesRequestParameters,
     MapSegmentEditJoinRequestParameters,
     MapSegmentEditSplitRequestParameters,
     MapSegmentMaterialControlRequestParameters,
@@ -560,6 +562,19 @@ export const useCleanSegmentsMutation = (
             });
             await options?.onSuccess?.(data, ...args);
         },
+    });
+};
+
+export const useSetRoomCleaningPreferencesMutation = (
+    options?: UseMutationOptions<void, unknown, RoomCleaningPreferencesRequestParameters>
+) => {
+    return useMutation({
+        mutationFn: (parameters: RoomCleaningPreferencesRequestParameters) => {
+            return sendSetRoomCleaningPreferencesCommand(parameters);
+        },
+        ...options,
+
+        onError: useOnCommandError(Capability.MapSegmentation),
     });
 };
 

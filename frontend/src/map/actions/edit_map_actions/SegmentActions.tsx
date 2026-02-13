@@ -1,6 +1,7 @@
 import {
     Capability,
     useMapSegmentationPropertiesQuery,
+    useSetRoomCleaningPreferencesMutation,
     MapSegmentRenameProperties,
     MapSegmentMaterial,
     RawMapLayerMaterial,
@@ -12,6 +13,7 @@ import {
     useSetSegmentMaterialMutation,
     useSplitSegmentMutation
 } from "../../../api";
+import SegmentCleaningPreferencesDialog from "./SegmentCleaningPreferencesDialog";
 import React from "react";
 import {
     Button,
@@ -151,89 +153,6 @@ interface SegmentMaterialDialogProps {
     onSubmit: (material: MapSegmentMaterial) => void;
 }
 
-interface SegmentCleaningPreferencesDialogProps {
-    open: boolean;
-    onClose: () => void;
-    segmentName: string;
-    preferences: {
-        times?: number;
-        water?: number;
-        suction?: number;
-    } | null | undefined;
-}
-
-const toTimesLabel = (times?: number): string => {
-    if (times === 1) {
-        return "Normal";
-    }
-    if (times === 2) {
-        return "Deep";
-    }
-
-    return times === undefined ? "Unknown" : String(times);
-};
-
-const toWaterLabel = (water?: number): string => {
-    if (water === 0) {
-        return "Low";
-    }
-    if (water === 1) {
-        return "Medium";
-    }
-    if (water === 2) {
-        return "High";
-    }
-    if (water === 3) {
-        return "Max";
-    }
-
-    return water === undefined ? "Unknown" : String(water);
-};
-
-const toSuctionLabel = (suction?: number): string => {
-    if (suction === 0) {
-        return "Standard";
-    }
-    if (suction === 1) {
-        return "Strong";
-    }
-    if (suction === 2) {
-        return "Max";
-    }
-    if (suction === 1000) {
-        return "Quiet";
-    }
-
-    return suction === undefined ? "Unknown" : String(suction);
-};
-
-const SegmentCleaningPreferencesDialog = (props: SegmentCleaningPreferencesDialogProps) => {
-    const {open, onClose, segmentName, preferences} = props;
-
-    return (
-        <Dialog open={open} onClose={onClose} sx={{userSelect: "none"}}>
-            <DialogTitle>Room Preferences</DialogTitle>
-            <DialogContent>
-                <DialogContentText>
-                    Current per-room cleaning preferences for segment &apos;{segmentName}&apos;.
-                </DialogContentText>
-                <Typography variant="body2" style={{marginTop: "0.75rem"}}>
-                    Clean route (times): {toTimesLabel(preferences?.times)}
-                </Typography>
-                <Typography variant="body2" style={{marginTop: "0.25rem"}}>
-                    Water usage: {toWaterLabel(preferences?.water)}
-                </Typography>
-                <Typography variant="body2" style={{marginTop: "0.25rem"}}>
-                    Fan speed: {toSuctionLabel(preferences?.suction)}
-                </Typography>
-            </DialogContent>
-            <DialogActions>
-                <Button onClick={onClose}>Close</Button>
-            </DialogActions>
-        </Dialog>
-    );
-};
-
 const SegmentMaterialDialog = (props: SegmentMaterialDialogProps) => {
     const {open, onClose, name, currentMaterial, onSubmit} = props;
     const [material, setMaterial] = React.useState<MapSegmentMaterial>(currentMaterial);
@@ -366,6 +285,14 @@ const SegmentActions = (
     const {
         data: mapSegmentationProperties
     } = useMapSegmentationPropertiesQuery();
+    const {
+        mutate: setRoomCleaningPreferences,
+        isPending: setRoomCleaningPreferencesPending
+    } = useSetRoomCleaningPreferencesMutation({
+        onSuccess: () => {
+            setCleaningPreferencesDialogOpen(false);
+        },
+    });
 
     const canEdit = props.robotStatus.value === "docked";
     const roomCleaningPreferencesSupported = mapSegmentationProperties?.roomCleaningPreferencesSupport?.enabled === true;
@@ -421,6 +348,18 @@ const SegmentActions = (
             material: material
         });
     }, [canEdit, setSegmentMaterial, selectedSegmentIds]);
+
+    const handleSetRoomCleaningPreferences = React.useCallback((prefs: { suction: number; water: number; times: number }) => {
+        if (selectedSegmentIds.length !== 1) {
+            return;
+        }
+        setRoomCleaningPreferences({
+            segment_id: selectedSegmentIds[0],
+            suction: prefs.suction,
+            water: prefs.water,
+            times: prefs.times
+        });
+    }, [setRoomCleaningPreferences, selectedSegmentIds]);
 
 
     return (
@@ -620,6 +559,8 @@ const SegmentActions = (
                     onClose={() => setCleaningPreferencesDialogOpen(false)}
                     segmentName={segmentNames[selectedSegmentId] ?? selectedSegmentId}
                     preferences={segmentRoomCleaningPreferences[selectedSegmentId]}
+                    onSave={handleSetRoomCleaningPreferences}
+                    isSaving={setRoomCleaningPreferencesPending}
                 />
             }
 

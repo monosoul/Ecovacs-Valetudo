@@ -13,6 +13,8 @@ const {
 } = require("../core/TopicStateSubscriber");
 const {labelNameFromId} = require("../../RoomLabels");
 
+const SPOT_AREA_ROOM_PREFS_TYPE = 4;
+
 const SERVICES = {
     map: {
         md5: "17d5f22724c41493b1778b9d79687330",
@@ -1496,15 +1498,19 @@ function buildRoomsSetLabelRequest(mapId, roomId, labelId) {
  * @returns {Buffer}
  */
 function buildRoomPreferencesRequest(mapId, roomId, cleaningTimes, waterLevel, suctionPower) {
-    const body = Buffer.from(
-        "0499698751000000000000000002000000000000000000000000000000000000000001000000010000000200000000010000000000000000000000000000000000000000010000000100000000",
-        "hex"
-    );
-    body.writeUInt32LE(mapId >>> 0, 1);
-    body.writeUInt32BE(roomId >>> 0, 44);
-    body.writeUInt32LE(cleaningTimes >>> 0, 64);
-    body.writeUInt32LE(waterLevel >>> 0, 68);
-    body.writeUInt32LE(suctionPower >>> 0, 72);
+    // Capture-validated SET format: 17-byte header + 30-byte room block = 47 bytes
+    const body = Buffer.alloc(47);
+    body.writeUInt8(SPOT_AREA_ROOM_PREFS_TYPE, 0);       // type = 4
+    body.writeUInt32LE(mapId >>> 0, 1);                   // mapid
+    // bytes 5..12: zeros (padding)
+    body.writeUInt32LE(1, 13);                            // room_count = 1
+    // Room block (30 bytes) at offset 17:
+    body.writeUInt8(roomId & 0xFF, 17);                   // room_index
+    // bytes 18..33: zeros (padding)
+    body.writeUInt32LE(suctionPower >>> 0, 34);           // suction_power
+    body.writeUInt32LE(waterLevel >>> 0, 38);             // water_level
+    body.writeUInt32LE(cleaningTimes >>> 0, 42);          // cleaning_times
+    // byte 46: zero (padding)
 
     return body;
 }
