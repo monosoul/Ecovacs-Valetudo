@@ -1092,6 +1092,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                     }
                 }
 
+                if (previous?.level !== level || previous?.flag !== flag) {
+                    stateChanged = true;
+                }
                 this.state.upsertFirstMatchingAttribute(new stateAttrs.BatteryStateAttribute({
                     level: level,
                     flag: flag
@@ -1102,7 +1105,6 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                         flag: flag
                     }
                 });
-                stateChanged = true;
             }
             if (chargeState && typeof chargeState.isOnCharger === "number" && typeof chargeState.chargeState === "number") {
                 this.updateRuntimeStateCache({
@@ -1136,7 +1138,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             this.state.upsertFirstMatchingAttribute(new stateAttrs.DockStatusStateAttribute({
                 value: statusToDockStatus(statusValue)
             }));
-            stateChanged = true;
+            if (previousStatusValue !== statusValue) {
+                stateChanged = true;
+            }
 
             if (stateChanged) {
                 this.emitStateAttributesUpdated();
