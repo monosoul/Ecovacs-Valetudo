@@ -10,6 +10,8 @@ class EcovacsMapSegmentationCapability extends MapSegmentationCapability {
      * @returns {Promise<Array<import("../../../entities/core/ValetudoMapSegment")>>}
      */
     async getSegments() {
+        const cache = this.robot.cachedRoomCleaningPreferences ?? {};
+
         return this.robot.state.map.layers
             .filter(layer => {
                 return layer.type === MapLayer.TYPE.SEGMENT;
@@ -20,12 +22,19 @@ class EcovacsMapSegmentationCapability extends MapSegmentationCapability {
                     id = id.toString();
                 }
 
+                const layerPrefs = layer.metaData.roomCleaningPreferences;
+                const cachedPrefs = cache[String(id)] ?? {};
+
                 return new ValetudoMapSegment({
                     id: id,
                     name: layer.metaData.name,
                     material: layer.metaData.material,
                     metaData: {
-                        roomCleaningPreferences: layer.metaData.roomCleaningPreferences ?? null
+                        roomCleaningPreferences: {
+                            suction: layerPrefs?.suction ?? cachedPrefs.suction,
+                            water: layerPrefs?.water ?? cachedPrefs.water,
+                            times: layerPrefs?.times ?? cachedPrefs.times,
+                        }
                     }
                 });
             });
@@ -51,7 +60,14 @@ class EcovacsMapSegmentationCapability extends MapSegmentationCapability {
             preferences.suction
         );
 
-        // Trigger a map poll so the UI reflects updated preferences
+        // Update cache immediately so the UI reflects the change
+        this.robot.cachedRoomCleaningPreferences[String(roomId)] = {
+            suction: preferences.suction,
+            water: preferences.water,
+            times: preferences.times,
+        };
+
+        // Trigger a map poll so the map layers also get refreshed
         this.robot.pollMap();
     }
 

@@ -84,6 +84,8 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.tracePathPointsMm = [];
         this.lastTraceEndIdx = -1;
         this.lastTraceMapId = null;
+        /** @type {Object<string, {suction: number, water: number, times: number}>} */
+        this.cachedRoomCleaningPreferences = {};
         this.activeMapId = 0;
         this.tracePathWarningShown = false;
         this.rosFacade = new EcovacsRosFacade({
@@ -222,6 +224,15 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
 
             if (!Array.isArray(roomDump.rooms) || roomDump.rooms.length === 0) {
                 throw new Error("No room polygons returned by ManipulateSpotArea");
+            }
+            for (const room of roomDump.rooms) {
+                if (room.preference_suction !== undefined) {
+                    this.cachedRoomCleaningPreferences[String(room.index)] = {
+                        suction: room.preference_suction,
+                        water: room.preference_water,
+                        times: room.preference_times,
+                    };
+                }
             }
             Logger.debug(`Ecovacs map poll: rooms fetched (${roomDump.rooms.length})`);
 
@@ -596,12 +607,14 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         const parsedRooms = rooms.map(room => {
             const polygon = Array.isArray(room.polygon) ? room.polygon : [];
 
+            const cached = this.cachedRoomCleaningPreferences[String(room.index)] ?? {};
+
             return {
                 index: String(room.index ?? "0"),
                 labelName: room.label_name ?? `Room ${room.index ?? 0}`,
-                preference_times: room.preference_times,
-                preference_water: room.preference_water,
-                preference_suction: room.preference_suction,
+                preference_times: room.preference_times ?? cached.times,
+                preference_water: room.preference_water ?? cached.water,
+                preference_suction: room.preference_suction ?? cached.suction,
                 polygonCm: polygon.map(point => {
                     return {
                         x: Math.round(Number(point[0]) / 10),
@@ -827,6 +840,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             if (pixels.length === 0) {
                 continue;
             }
+            const cachedPrefs = this.cachedRoomCleaningPreferences[String(room.index)] ?? {};
             layers.push(new mapEntities.MapLayer({
                 type: mapEntities.MapLayer.TYPE.SEGMENT,
                 pixels: pixels.sort(mapEntities.MapLayer.COORDINATE_TUPLE_SORT).flat(),
@@ -834,9 +848,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                     segmentId: String(room.index ?? "0"),
                     name: room.label_name ?? `Room ${room.index ?? 0}`,
                     roomCleaningPreferences: {
-                        times: room.preference_times,
-                        water: room.preference_water,
-                        suction: room.preference_suction
+                        times: room.preference_times ?? cachedPrefs.times,
+                        water: room.preference_water ?? cachedPrefs.water,
+                        suction: room.preference_suction ?? cachedPrefs.suction
                     }
                 }
             }));
