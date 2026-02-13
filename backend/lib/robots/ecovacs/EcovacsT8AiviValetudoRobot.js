@@ -379,7 +379,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
      */
     async runStartCleanCommand(args) {
         const command = String(args?.[0] ?? "").toLowerCase();
-        Logger.info(`Ecovacs command start-clean: ${command} args=${JSON.stringify(args ?? [])}`);
+        if (this.rosDebug) {
+            Logger.info(`Ecovacs command start-clean: ${command} args=${JSON.stringify(args ?? [])}`);
+        }
         let responseCode = null;
         switch (command) {
             case "start":
@@ -443,7 +445,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 throw new Error(`Unsupported start clean command: ${command}`);
         }
         if (responseCode !== null) {
-            Logger.info(`Ecovacs command result: ${command} response=${responseCode}`);
+            if (this.rosDebug) {
+                Logger.info(`Ecovacs command result: ${command} response=${responseCode}`);
+            }
         }
 
         return {stdout: "", stderr: ""};
