@@ -2,6 +2,7 @@ const CombinedVirtualRestrictionsCapability = require("../../../core/capabilitie
 const Logger = require("../../../Logger");
 const ValetudoRestrictedZone = require("../../../entities/core/ValetudoRestrictedZone");
 const ValetudoVirtualRestrictions = require("../../../entities/core/ValetudoVirtualRestrictions");
+const ValetudoVirtualWall = require("../../../entities/core/ValetudoVirtualWall");
 
 /**
  * @extends CombinedVirtualRestrictionsCapability<import("../EcovacsT8AiviValetudoRobot")>
@@ -20,12 +21,14 @@ class EcovacsCombinedVirtualRestrictionsCapability extends CombinedVirtualRestri
      * @returns {Promise<import("../../../entities/core/ValetudoVirtualRestrictions")>}
      */
     async getVirtualRestrictions() {
+        const virtualWalls = [];
         const restrictedZones = [];
         const mapId = requireActiveMapId(this.robot.getActiveMapId());
         const walls = await this.robot.rosFacade.getVirtualWalls(mapId);
         Logger.debug(`Ecovacs restrictions refresh: mapId=${mapId} walls=${walls.length}`);
         for (const wall of walls) {
-            const mapped = (Array.isArray(wall.dots) ? wall.dots : []).map(dot => {
+            const dots = Array.isArray(wall.dots) ? wall.dots : [];
+            const mapped = dots.map(dot => {
                 return this.robot.worldPointToMap({x: Number(dot[0]), y: Number(dot[1])});
             }).filter(point => {
                 return point && Number.isFinite(point.x) && Number.isFinite(point.y);
@@ -33,28 +36,39 @@ class EcovacsCombinedVirtualRestrictionsCapability extends CombinedVirtualRestri
             if (mapped.length < 2) {
                 continue;
             }
-            const xs = mapped.map(point => point.x);
-            const ys = mapped.map(point => point.y);
-            const minX = Math.min(...xs);
-            const maxX = Math.max(...xs);
-            const minY = Math.min(...ys);
-            const maxY = Math.max(...ys);
-            if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minY) || !Number.isFinite(maxY)) {
-                continue;
+
+            // 2 dots = line wall, 4 dots = rectangular zone
+            if (dots.length === 2 && Number(wall.type) === 0) {
+                virtualWalls.push(new ValetudoVirtualWall({
+                    points: {
+                        pA: {x: mapped[0].x, y: mapped[0].y},
+                        pB: {x: mapped[1].x, y: mapped[1].y}
+                    }
+                }));
+            } else {
+                const xs = mapped.map(point => point.x);
+                const ys = mapped.map(point => point.y);
+                const minX = Math.min(...xs);
+                const maxX = Math.max(...xs);
+                const minY = Math.min(...ys);
+                const maxY = Math.max(...ys);
+                if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minY) || !Number.isFinite(maxY)) {
+                    continue;
+                }
+                restrictedZones.push(new ValetudoRestrictedZone({
+                    points: {
+                        pA: {x: minX, y: minY},
+                        pB: {x: maxX, y: minY},
+                        pC: {x: maxX, y: maxY},
+                        pD: {x: minX, y: maxY}
+                    },
+                    type: Number(wall.type) === 1 ? ValetudoRestrictedZone.TYPE.MOP : ValetudoRestrictedZone.TYPE.REGULAR
+                }));
             }
-            restrictedZones.push(new ValetudoRestrictedZone({
-                points: {
-                    pA: {x: minX, y: minY},
-                    pB: {x: maxX, y: minY},
-                    pC: {x: maxX, y: maxY},
-                    pD: {x: minX, y: maxY}
-                },
-                type: Number(wall.type) === 1 ? ValetudoRestrictedZone.TYPE.MOP : ValetudoRestrictedZone.TYPE.REGULAR
-            }));
         }
 
         return new ValetudoVirtualRestrictions({
-            virtualWalls: [],
+            virtualWalls: virtualWalls,
             restrictedZones: restrictedZones
         });
     }
@@ -64,17 +78,11 @@ class EcovacsCombinedVirtualRestrictionsCapability extends CombinedVirtualRestri
      * @returns {Promise<void>}
      */
     async setVirtualRestrictions(virtualRestrictions) {
-        if (Array.isArray(virtualRestrictions.virtualWalls) && virtualRestrictions.virtualWalls.length > 0) {
-            Logger.warn(
-                `Ecovacs restrictions save: ignoring ${virtualRestrictions.virtualWalls.length} line walls` +
-                " because firmware supports only rectangular zones"
-            );
-        }
-
+        const lineWalls = Array.isArray(virtualRestrictions.virtualWalls) ? virtualRestrictions.virtualWalls : [];
         const restrictedZones = Array.isArray(virtualRestrictions.restrictedZones) ? virtualRestrictions.restrictedZones : [];
         const mapId = requireActiveMapId(this.robot.getActiveMapId());
         Logger.debug(
-            `Ecovacs restrictions save: mapId=${mapId} zones=${restrictedZones.length}`
+            `Ecovacs restrictions save: mapId=${mapId} walls=${lineWalls.length} zones=${restrictedZones.length}`
         );
         const existing = await this.robot.rosFacade.getVirtualWalls(mapId);
         for (const wall of existing) {
@@ -87,6 +95,14 @@ class EcovacsCombinedVirtualRestrictionsCapability extends CombinedVirtualRestri
         }
 
         let nextId = 1;
+        for (const lineWall of lineWalls) {
+            const pA = this.robot.mapPointToWorld(lineWall.points.pA);
+            const pB = this.robot.mapPointToWorld(lineWall.points.pB);
+            const result = await this.robot.rosFacade.addVirtualWallPoints(
+                mapId, nextId++, 0, [[pA.x, pA.y], [pB.x, pB.y]]
+            );
+            ensureResultOk("addVirtualWall", result);
+        }
         for (const zone of restrictedZones) {
             const rect = this.robot.mapZoneToWorldRect(zone);
             if (zone.type === ValetudoRestrictedZone.TYPE.MOP) {
