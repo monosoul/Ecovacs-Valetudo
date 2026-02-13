@@ -98,6 +98,15 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.state.upsertFirstMatchingAttribute(new stateAttrs.DockStatusStateAttribute({
             value: stateAttrs.DockStatusStateAttribute.VALUE.IDLE
         }));
+        const cachedChargeState = this.runtimeStateCache?.chargeState;
+        const isCachedDocked = Boolean(
+            cachedChargeState &&
+            Number.isFinite(Number(cachedChargeState.isOnCharger)) &&
+            Number(cachedChargeState.isOnCharger) > 0
+        );
+        const initialStatus = isCachedDocked ?
+            stateAttrs.StatusStateAttribute.VALUE.DOCKED :
+            stateAttrs.StatusStateAttribute.VALUE.IDLE;
         const cachedBatteryLevel = Number(this.runtimeStateCache?.battery?.level);
         const cachedBatteryFlag = this.runtimeStateCache?.battery?.flag;
         const batteryLevel = Number.isFinite(cachedBatteryLevel) ? clampInt(cachedBatteryLevel, 0, 100) : 0;
@@ -108,7 +117,10 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             level: batteryLevel,
             flag: batteryFlag
         }));
-        this.setStatus(stateAttrs.StatusStateAttribute.VALUE.IDLE);
+        this.setStatus(initialStatus);
+        this.state.upsertFirstMatchingAttribute(new stateAttrs.DockStatusStateAttribute({
+            value: statusToDockStatus(initialStatus)
+        }));
 
         const cachedPose = this.runtimeStateCache?.robotPose;
         if (cachedPose && Number.isFinite(cachedPose.x) && Number.isFinite(cachedPose.y)) {
@@ -1020,6 +1032,14 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 });
                 stateChanged = true;
             }
+            if (chargeState && typeof chargeState.isOnCharger === "number" && typeof chargeState.chargeState === "number") {
+                this.updateRuntimeStateCache({
+                    chargeState: {
+                        isOnCharger: Number(chargeState.isOnCharger),
+                        chargeState: Number(chargeState.chargeState)
+                    }
+                });
+            }
 
             if (!workState && !chargeState) {
                 if (stateChanged) {
@@ -1055,34 +1075,46 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
     }
 
     /**
-     * @returns {{robotPose:{x:number,y:number,angle:number}|null,battery:{level:number,flag:string}|null}}
+     * @returns {{robotPose:{x:number,y:number,angle:number}|null,battery:{level:number,flag:string}|null,chargeState:{isOnCharger:number,chargeState:number}|null}}
      */
     loadRuntimeStateCache() {
         try {
             if (!fs.existsSync(this.runtimeStateCachePath)) {
                 return {
                     robotPose: null,
-                    battery: null
+                    battery: null,
+                    chargeState: null
                 };
             }
             const parsed = JSON.parse(fs.readFileSync(this.runtimeStateCachePath, "utf8"));
+            const cachedChargeState = parsed?.chargeState;
+            const chargeState = (
+                cachedChargeState &&
+                Number.isFinite(Number(cachedChargeState.isOnCharger)) &&
+                Number.isFinite(Number(cachedChargeState.chargeState))
+            ) ? {
+                isOnCharger: Number(cachedChargeState.isOnCharger),
+                chargeState: Number(cachedChargeState.chargeState)
+            } : null;
 
             return {
                 robotPose: parsed?.robotPose ?? null,
-                battery: parsed?.battery ?? null
+                battery: parsed?.battery ?? null,
+                chargeState: chargeState
             };
         } catch (e) {
             Logger.debug(`Failed to read Ecovacs runtime cache: ${e?.message ?? e}`);
 
             return {
                 robotPose: null,
-                battery: null
+                battery: null,
+                chargeState: null
             };
         }
     }
 
     /**
-     * @param {{robotPose?:{x:number,y:number,angle:number},battery?:{level:number,flag:string}}} patch
+     * @param {{robotPose?:{x:number,y:number,angle:number},battery?:{level:number,flag:string},chargeState?:{isOnCharger:number,chargeState:number}}} patch
      */
     updateRuntimeStateCache(patch) {
         let changed = false;
@@ -1113,6 +1145,24 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 this.runtimeStateCache.battery.flag !== battery.flag
             ) {
                 this.runtimeStateCache.battery = battery;
+                changed = true;
+            }
+        }
+        if (patch.chargeState) {
+            const chargeState = {
+                isOnCharger: Number(patch.chargeState.isOnCharger),
+                chargeState: Number(patch.chargeState.chargeState)
+            };
+            if (
+                Number.isFinite(chargeState.isOnCharger) &&
+                Number.isFinite(chargeState.chargeState) &&
+                (
+                    !this.runtimeStateCache.chargeState ||
+                    this.runtimeStateCache.chargeState.isOnCharger !== chargeState.isOnCharger ||
+                    this.runtimeStateCache.chargeState.chargeState !== chargeState.chargeState
+                )
+            ) {
+                this.runtimeStateCache.chargeState = chargeState;
                 changed = true;
             }
         }
