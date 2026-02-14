@@ -1,5 +1,6 @@
 "use strict";
 
+const Logger = require("../../../../Logger");
 const net = require("net");
 
 class BufferedTcpSocket {
@@ -43,11 +44,18 @@ class BufferedTcpSocket {
             };
             const onError = err => {
                 cleanup();
+                socket.on("error", (e) => {
+                    Logger.debug(`BufferedTcpSocket post-error destroy: ${e?.message ?? e}`);
+                });
+                socket.destroy();
                 reject(err);
             };
             const onTimeout = () => {
                 cleanup();
-                socket.destroy(new Error(`Connect timeout after ${timeoutMs}ms`));
+                socket.on("error", (e) => {
+                    Logger.debug(`BufferedTcpSocket post-timeout destroy: ${e?.message ?? e}`);
+                });
+                socket.destroy();
                 reject(new Error(`Connect timeout after ${timeoutMs}ms`));
             };
             const cleanup = () => {
@@ -163,6 +171,7 @@ class BufferedTcpSocket {
     async close() {
         this.closed = true;
         if (this.socket) {
+            this.socket.removeAllListeners();
             this.socket.destroy();
             this.socket = null;
         }

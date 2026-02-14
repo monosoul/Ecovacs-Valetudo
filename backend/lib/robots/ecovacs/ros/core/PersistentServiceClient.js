@@ -35,11 +35,17 @@ class PersistentServiceClient {
      * @returns {Promise<Buffer>}
      */
     async call(requestBody) {
-        this.lock = this.lock.then(() => {
-            return this.callLocked(requestBody);
+        const next = this.lock
+            .catch((e) => {
+                Logger.debug(`PersistentServiceClient lock chain recovered from previous error: ${e?.message ?? e}`);
+            })
+            .then(() => this.callLocked(requestBody));
+
+        this.lock = next.catch((e) => {
+            Logger.debug(`PersistentServiceClient call failed, keeping lock chain alive: ${e?.message ?? e}`);
         });
 
-        return await this.lock;
+        return await next;
     }
 
     /**
