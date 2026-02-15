@@ -1078,10 +1078,12 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 } catch (e) {
                     if (!this.tracePathWarningShown) {
                         Logger.warn(
-                            "Ecovacs trace path disabled for now: ROS trace service call failed.",
+                            "Ecovacs trace: service call failed.",
                             e?.message ?? e
                         );
                         this.tracePathWarningShown = true;
+                    } else if (this.rosDebug) {
+                        Logger.debug(`Ecovacs trace: service call failed: ${e?.message ?? e}`);
                     }
                 }
             }
@@ -1361,10 +1363,23 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
      * @returns {Promise<void>}
      */
     async updateTracePathFromService() {
-        const trace = await this.rosFacade.getTraceLatest(this.getActiveMapId(), this.traceTailEntries);
-        const traceMapId = Number(trace?.trace_mapid);
-        const traceEndIdx = Number(trace?.trace_end_idx);
-        const rawHex = String(trace?.trace_raw_hex ?? "");
+        const mapId = this.getActiveMapId();
+        const trace = await this.rosFacade.getTraceLatest(mapId, this.traceTailEntries);
+        if (trace === null) {
+            // The trace service signals a reset (endIdx=0 or 0xFFFFFFFF).
+            // Clear stale state so the next real endIdx is accepted.
+            if (this.lastTraceEndIdx !== -1) {
+                this.tracePathPointsMm = [];
+                this.lastTraceEndIdx = -1;
+                if (this.rosDebug) {
+                    Logger.debug("Ecovacs trace: service signaled reset, cleared trace state");
+                }
+            }
+            return;
+        }
+        const traceMapId = Number(trace.trace_mapid);
+        const traceEndIdx = Number(trace.trace_end_idx);
+        const rawHex = String(trace.trace_raw_hex ?? "");
         if (!Number.isFinite(traceMapId) || !Number.isFinite(traceEndIdx) || rawHex.length === 0) {
             return;
         }

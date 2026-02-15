@@ -497,6 +497,13 @@ class EcovacsRosFacade {
         const traceInfo = parseTraceResponse(infoBody);
 
         const endIdx = Number(traceInfo.endIdx);
+
+        // 0xFFFFFFFF means the trace is being reset (e.g. cleaning just started);
+        // no data is available yet so skip the range fetch.
+        if (endIdx === 0 || endIdx >= 0xFFFFFFF0) {
+            return null;
+        }
+
         const startIdx = Math.max(0, endIdx - Math.max(1, tailCount));
 
         const traceRangeRequest = Buffer.alloc(13);
