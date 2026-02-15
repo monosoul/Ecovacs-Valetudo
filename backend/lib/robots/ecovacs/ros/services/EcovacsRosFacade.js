@@ -201,26 +201,30 @@ class EcovacsRosFacade {
     }
 
     async startup() {
-        await this.poseSubscriber.start();
-        await this.batterySubscriber.start();
-        await this.chargeStateSubscriber.start();
-        await this.workStateSubscriber.start();
+        await Promise.all([
+            this.poseSubscriber.start(),
+            this.batterySubscriber.start(),
+            this.chargeStateSubscriber.start(),
+            this.workStateSubscriber.start()
+        ]);
     }
 
     async shutdown() {
-        await this.poseSubscriber.shutdown();
-        await this.batterySubscriber.shutdown();
-        await this.chargeStateSubscriber.shutdown();
-        await this.workStateSubscriber.shutdown();
-        await this.mapClient.shutdown();
-        await this.mapInfosClient.shutdown();
-        await this.spotAreaClient.shutdown();
-        await this.chargerClient.shutdown();
-        await this.traceClient.shutdown();
-        await this.virtualWallClient.shutdown();
-        await this.workClient.shutdown();
-        await this.settingClient.shutdown();
-        await this.lifespanClient.shutdown();
+        await Promise.all([
+            this.poseSubscriber.shutdown(),
+            this.batterySubscriber.shutdown(),
+            this.chargeStateSubscriber.shutdown(),
+            this.workStateSubscriber.shutdown(),
+            this.mapClient.shutdown(),
+            this.mapInfosClient.shutdown(),
+            this.spotAreaClient.shutdown(),
+            this.chargerClient.shutdown(),
+            this.traceClient.shutdown(),
+            this.virtualWallClient.shutdown(),
+            this.workClient.shutdown(),
+            this.settingClient.shutdown(),
+            this.lifespanClient.shutdown()
+        ]);
     }
 
     /**
