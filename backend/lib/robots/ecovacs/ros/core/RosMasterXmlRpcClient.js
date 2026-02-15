@@ -12,7 +12,7 @@ class RosMasterXmlRpcClient {
      * @param {number} [options.timeoutMs]
      */
     constructor(options) {
-        this.masterUri = options.masterUri;
+        this.masterUri = normalizeLocalhostUri(options.masterUri);
         this.timeoutMs = options.timeoutMs ?? 4000;
     }
 
