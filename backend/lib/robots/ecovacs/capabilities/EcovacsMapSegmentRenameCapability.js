@@ -1,3 +1,4 @@
+const Logger = require("../../../Logger");
 const MapSegmentRenameCapability = require("../../../core/capabilities/MapSegmentRenameCapability");
 const {ROOM_LABEL_NAMES_BY_ID, labelIdFromName} = require("../RoomLabels");
 
@@ -22,7 +23,16 @@ class EcovacsMapSegmentRenameCapability extends MapSegmentRenameCapability {
         }
 
         const labelId = labelIdFromName(name);
+
+        const currentSegments = this.robot.state?.map?.getSegments?.() ?? [];
+        Logger.debug(
+            `MapSegmentRename: segment.id=${segment.id} roomId=${roomId} mapId=${mapId} ` +
+            `labelId=${labelId} name=${name} ` +
+            `currentSegments=[${currentSegments.map(s => `{id=${s.id},name=${s.name}}`).join(", ")}]`
+        );
+
         const response = await this.robot.rosFacade.setRoomLabel(mapId, roomId, labelId);
+        Logger.debug(`MapSegmentRename: response=${JSON.stringify(response)}`);
         if (Number(response?.result) !== 0) {
             throw new Error(`setRoomLabel failed with result=${response?.result}`);
         }

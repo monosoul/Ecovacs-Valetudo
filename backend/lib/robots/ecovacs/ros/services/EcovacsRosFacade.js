@@ -353,7 +353,12 @@ class EcovacsRosFacade {
      */
     async setRoomLabel(mapId, roomId, labelId) {
         const request = buildRoomsSetLabelRequest(mapId, roomId, labelId);
+        Logger.debug(
+            `setRoomLabel: mapId=${mapId} roomId=${roomId} labelId=${labelId} ` +
+            `requestHex=${request.toString("hex")}`
+        );
         const body = await this.spotAreaClient.call(request);
+        Logger.debug(`setRoomLabel: responseHex=${body.toString("hex")}`);
 
         return parseRoomsHeaderOnly(body);
     }
@@ -1223,6 +1228,12 @@ function extractRoomPolygonsDeterministic(body, areaCount) {
     let cursor = 13;
 
     for (let idx = 0; idx < areaCount; idx++) {
+        // Each SpotArea block: areaid(u32) name_len(u32) name(bytes) type(u8) polygon(u32 count + count*2f) connections(u32 count + count*u32)
+        // The polygon signature scan finds poly_count position (found.off).
+        // Room header layout (with name_len=0): areaid(4) + name_len(4) + type(1) = 9 bytes before poly_count.
+        // We read areaid AFTER finding the polygon to derive it from found.off, because cursor
+        // only advances to end-of-polygon and does NOT skip post-polygon data (connections/prefs).
+
         let found = null;
         for (let off = cursor + 8; off <= body.length - 4; off++) {
             const z1 = body.readUInt32LE(off - 8);
@@ -1259,6 +1270,15 @@ function extractRoomPolygonsDeterministic(body, areaCount) {
             throw new Error(`Room block ${idx} not found from offset ${cursor}`);
         }
 
+        // Read areaid from a fixed offset relative to the polygon position.
+        // Layout before poly_count: areaid(4) + name_len(4) + type(1) = 9 bytes.
+        // name_len is 0 on this firmware (names are encoded as label IDs).
+        const areaidOffset = found.off - 9;
+        if (areaidOffset < 0) {
+            throw new Error(`Room block ${idx}: areaid offset ${areaidOffset} is before buffer start`);
+        }
+        const areaid = body.readUInt32LE(areaidOffset);
+
         const metadata = body.subarray(cursor, found.off);
         const labelId = metadata.length > 0 ? metadata[metadata.length - 1] : 0;
         const polygon = [];
@@ -1272,7 +1292,7 @@ function extractRoomPolygonsDeterministic(body, areaCount) {
         const ys = polygon.map(point => point[1]);
 
         rooms.push({
-            index: idx,
+            index: areaid,
             offset: found.off,
             pointCount: found.pointCount,
             bbox: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
@@ -1374,10 +1394,10 @@ function extractRoomPreferences(body, rooms) {
         tailBytes = body.subarray(tailStart);
     }
 
-    return rooms.map(room => {
-        // Room N's prefs are in rawMetas[N+1] (next room's gap) or tail (last room)
-        const gap = (room.index + 1 < rawMetas.length) ?
-            rawMetas[room.index + 1] :
+    return rooms.map((room, pos) => {
+        // Room at position N's prefs are in rawMetas[N+1] (next room's gap) or tail (last room)
+        const gap = (pos + 1 < rawMetas.length) ?
+            rawMetas[pos + 1] :
             tailBytes;
 
         return {
