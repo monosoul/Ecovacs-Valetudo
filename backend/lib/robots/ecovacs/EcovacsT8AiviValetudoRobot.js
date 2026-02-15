@@ -193,7 +193,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 const activeMapId = await this.rosFacade.getActiveMapId();
                 if (activeMapId !== null) {
                     this.activeMapId = activeMapId;
-                    Logger.info(`Ecovacs: initial active map ID is ${activeMapId}`);
+                    Logger.debug(`Ecovacs: initial active map ID is ${activeMapId}`);
                 } else {
                     Logger.warn("Ecovacs: no active map ID available at startup");
                 }
