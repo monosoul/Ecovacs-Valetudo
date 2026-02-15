@@ -273,10 +273,37 @@ control session code (if manual control is desired):
 
 ### Running
 
-Save the config as `valetudo.json` and point Valetudo at it:
+Save the config as `valetudo_config.json` and point Valetudo at it.
+Use `nohup` with output redirected so it survives SSH disconnects:
 
 ```sh
-VALETUDO_CONFIG_PATH=/data/valetudo_config.json /data/valetudo
+nohup env VALETUDO_CONFIG_PATH=/data/valetudo_config.json /data/valetudo > /tmp/valetudo_stdout.log 2>&1 &
+```
+
+Without `nohup` and redirection, disconnecting the SSH session kills the
+controlling TTY. Any subsequent write to stdout/stderr (e.g. from
+`execSync` in NTP time sync) will fail with `EIO` and crash the process.
+
+Valetudo writes its own application log to `/tmp/valetudo.log`.
+The `valetudo_stdout.log` file captures any additional output that goes
+directly to stdout/stderr.
+
+For a startup script (no TTY), `nohup` is not needed — just redirect and
+background:
+
+```sh
+VALETUDO_CONFIG_PATH=/data/valetudo_config.json /data/valetudo > /tmp/valetudo_stdout.log 2>&1 &
+```
+
+To auto-restart on crash, wrap it in a loop:
+
+```sh
+#!/bin/sh
+while true; do
+    VALETUDO_CONFIG_PATH=/data/valetudo_config.json /data/valetudo > /tmp/valetudo_stdout.log 2>&1
+    echo "Valetudo exited with code $?, restarting in 5s..." >> /tmp/valetudo_stdout.log
+    sleep 5
+done &
 ```
 
 When running directly on the robot, the ROS master and `mdsctl` defaults
