@@ -2065,7 +2065,7 @@ function rebuildEntitiesOnlyMap(currentMap, positions, robotPose, tracePathPoint
     if (dynamicEntities.length === 0) {
         return null;
     }
-    if (areEntitySetsEquivalent(currentMap.entities, staticEntities.concat(dynamicEntities))) {
+    if (areDynamicEntitiesUnchanged(currentMap.entities, dynamicEntities)) {
         return null;
     }
 
@@ -2391,16 +2391,38 @@ function waterLevelToPresetValue(level) {
 }
 
 /**
- * @param {Array<any>} before
- * @param {Array<any>} after
+ * Check whether the dynamic entities (robot, charger, path) in the current
+ * map already match the newly computed ones by comparing points arrays
+ * element-by-element. Avoids JSON.stringify on every live-position poll.
+ *
+ * @param {Array<any>} currentEntities
+ * @param {Array<any>} newDynamic
  * @returns {boolean}
  */
-function areEntitySetsEquivalent(before, after) {
-    try {
-        return JSON.stringify(before ?? []) === JSON.stringify(after ?? []);
-    } catch (e) {
-        return false;
+function areDynamicEntitiesUnchanged(currentEntities, newDynamic) {
+    const oldEntities = Array.isArray(currentEntities) ? currentEntities : [];
+    for (const newEntity of newDynamic) {
+        const match = oldEntities.find(e => e?.type === newEntity?.type);
+        if (!match) {
+            return false;
+        }
+        const oldPts = match.points;
+        const newPts = newEntity.points;
+        if (!Array.isArray(oldPts) || !Array.isArray(newPts) || oldPts.length !== newPts.length) {
+            return false;
+        }
+        for (let i = 0; i < oldPts.length; i++) {
+            if (oldPts[i] !== newPts[i]) {
+                return false;
+            }
+        }
+        // Compare angle metadata (robot position)
+        if ((match.metaData?.angle ?? 0) !== (newEntity.metaData?.angle ?? 0)) {
+            return false;
+        }
     }
+
+    return true;
 }
 
 /**
