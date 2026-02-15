@@ -287,9 +287,9 @@ class EcovacsRosFacade {
 
         const header = parseRoomsHeaderOnly(body);
         const rooms = extractRoomPolygonsDeterministic(body, header.areaCount);
-        const decodedPrefs = decodeRoomPreferencesFromGetResponse(body);
+        const decodedPrefs = extractRoomPreferences(body, rooms);
         const preferencesByIndex = {};
-        for (const pref of decodedPrefs.rooms) {
+        for (const pref of decodedPrefs) {
             preferencesByIndex[pref.index] = pref;
         }
 
@@ -1262,9 +1262,8 @@ function extractPrefsFromGap(gapData) {
 
 /**
  * Decode per-room cleaning preferences from GET_SPOTAREAS response body.
- *
- * Key insight: Room N's preferences are stored in the gap AFTER room N's polygon,
- * not in the metadata before it. For the last room, preferences are in the tail.
+ * Parses header and rooms internally - use extractRoomPreferences() if
+ * rooms are already parsed to avoid duplicate work.
  *
  * @param {Buffer} body
  * @returns {{header:any, rooms:Array<{index:number, label_id:number, decoded:{suction_power:number,water_level:number,cleaning_times:number,connections:Array<number>}|null}>}}
@@ -1273,6 +1272,23 @@ function decodeRoomPreferencesFromGetResponse(body) {
     const header = parseRoomsHeaderOnly(body);
     const rooms = extractRoomPolygonsDeterministic(body, header.areaCount);
 
+    return {
+        header: header,
+        rooms: extractRoomPreferences(body, rooms)
+    };
+}
+
+/**
+ * Extract per-room cleaning preferences from already-parsed rooms.
+ *
+ * Key insight: Room N's preferences are stored in the gap AFTER room N's polygon,
+ * not in the metadata before it. For the last room, preferences are in the tail.
+ *
+ * @param {Buffer} body
+ * @param {Array<{index:number,offset:number,pointCount:number,metadataPrefixLen:number,labelId:number}>} rooms
+ * @returns {Array<{index:number, label_id:number, decoded:{suction_power:number,water_level:number,cleaning_times:number,sequence_position:number,connections:Array<number>}|null}>}
+ */
+function extractRoomPreferences(body, rooms) {
     // Collect raw metadata gaps (bytes before each polygon) and the tail
     const rawMetas = rooms.map(room => {
         const metaStart = room.offset - room.metadataPrefixLen;
@@ -1287,7 +1303,7 @@ function decodeRoomPreferencesFromGetResponse(body) {
         tailBytes = body.subarray(tailStart);
     }
 
-    const decodedRooms = rooms.map(room => {
+    return rooms.map(room => {
         // Room N's prefs are in rawMetas[N+1] (next room's gap) or tail (last room)
         const gap = (room.index + 1 < rawMetas.length) ?
             rawMetas[room.index + 1] :
@@ -1299,11 +1315,6 @@ function decodeRoomPreferencesFromGetResponse(body) {
             decoded: extractPrefsFromGap(gap)
         };
     });
-
-    return {
-        header: header,
-        rooms: decodedRooms
-    };
 }
 
 /**
