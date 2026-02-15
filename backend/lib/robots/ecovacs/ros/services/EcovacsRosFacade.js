@@ -9,7 +9,8 @@ const {
     TopicStateSubscriber,
     decodePowerBattery,
     decodePowerChargeState,
-    decodeTaskWorkState
+    decodeTaskWorkState,
+    decodeWorkStatisticToWifi
 } = require("../core/TopicStateSubscriber");
 const {labelNameFromId} = require("../../RoomLabels");
 
@@ -52,6 +53,14 @@ const SERVICES = {
     lifespan: {
         md5: "35c020f6d3af5b57369fe7f26779c5d8",
         candidates: ["/lifespan/lifespan", "/lifespan/lifespansrv"]
+    },
+    getLogInfo: {
+        md5: "349803b37ad93c0069b0431de1bb30cc",
+        candidates: ["/worklog/GetLogInfo", "/worklog/getLogInfo", "/worklog/get_log_info"]
+    },
+    getLastLogInfo: {
+        md5: "bf16b43980095bc05ef5a1ac5c002f5a",
+        candidates: ["/worklog/GetLastLogInfo", "/worklog/getLastLogInfo", "/worklog/get_last_log_info"]
     }
 };
 
@@ -157,6 +166,8 @@ class EcovacsRosFacade {
         this.workClient = makeClient("work", {persistent: false});
         this.settingClient = makeClient("setting", {persistent: false});
         this.lifespanClient = makeClient("lifespan", {persistent: false});
+        this.getLogInfoClient = makeClient("getLogInfo", {persistent: false});
+        this.getLastLogInfoClient = makeClient("getLastLogInfo", {persistent: false});
 
         this.poseSubscriber = new PredictionPoseSubscriber({
             masterClient: this.masterClient,
@@ -198,6 +209,19 @@ class EcovacsRosFacade {
             readTimeoutMs: options.callTimeoutMs,
             onWarn: options.onWarn
         });
+        this.workStatisticSubscriber = new TopicStateSubscriber({
+            masterClient: this.masterClient,
+            callerId: this.callerId,
+            topic: "/worklog/WorkStatisticToWifi",
+            type: "worklog/WorkStatisticToWifi",
+            md5: "a54e1098445f2092ed11f984eeb3cf90",
+            decoder: decodeWorkStatisticToWifi,
+            safeResolve: true,
+            reconnectDelayMs: 10_000, // topic only publishes during cleaning; poll less when idle
+            connectTimeoutMs: options.connectTimeoutMs,
+            readTimeoutMs: options.callTimeoutMs,
+            onWarn: options.onWarn
+        });
     }
 
     async startup() {
@@ -205,7 +229,8 @@ class EcovacsRosFacade {
             this.poseSubscriber.start(),
             this.batterySubscriber.start(),
             this.chargeStateSubscriber.start(),
-            this.workStateSubscriber.start()
+            this.workStateSubscriber.start(),
+            this.workStatisticSubscriber.start()
         ]);
     }
 
@@ -215,6 +240,7 @@ class EcovacsRosFacade {
             this.batterySubscriber.shutdown(),
             this.chargeStateSubscriber.shutdown(),
             this.workStateSubscriber.shutdown(),
+            this.workStatisticSubscriber.shutdown(),
             this.mapClient.shutdown(),
             this.mapInfosClient.shutdown(),
             this.spotAreaClient.shutdown(),
@@ -223,7 +249,9 @@ class EcovacsRosFacade {
             this.virtualWallClient.shutdown(),
             this.workClient.shutdown(),
             this.settingClient.shutdown(),
-            this.lifespanClient.shutdown()
+            this.lifespanClient.shutdown(),
+            this.getLogInfoClient.shutdown(),
+            this.getLastLogInfoClient.shutdown()
         ]);
     }
 
@@ -960,6 +988,42 @@ class EcovacsRosFacade {
         const body = await this.lifespanClient.call(request);
 
         return parseLifespanResponse(body);
+    }
+
+    /**
+     * Get the latest work statistic from the topic subscriber cache.
+     *
+     * @param {number} staleMs
+     * @returns {{worktype:number, worktime:number, workareaDm2:number, extraAreaDm2:number, waterboxType:number, startTimeSecs:number}|null}
+     */
+    getWorkStatistic(staleMs) {
+        return this.workStatisticSubscriber.getLatestValue(staleMs);
+    }
+
+    /**
+     * Get total cleaning statistics from /worklog/GetLogInfo.
+     *
+     * @returns {Promise<{totalCnt:number, totalSecs:number, totalAreaM2:number}>}
+     */
+    async getTotalStatistics() {
+        const request = Buffer.alloc(1);
+        request.writeUInt8(0, 0); // getType = 0
+        const body = await this.getLogInfoClient.call(request);
+
+        return parseGetLogInfoResponse(body);
+    }
+
+    /**
+     * Get last cleaning session statistics from /worklog/GetLastLogInfo.
+     *
+     * @returns {Promise<{worktype:number, worktime:number, workareaDm2:number, extraAreaDm2:number, waterboxType:number, startTimeSecs:number}>}
+     */
+    async getLastCleanStatistics() {
+        const request = Buffer.alloc(1);
+        request.writeUInt8(0, 0); // getType = 0
+        const body = await this.getLastLogInfoClient.call(request);
+
+        return parseGetLastLogInfoResponse(body);
     }
 
     /**
@@ -1727,6 +1791,65 @@ function parseLifespanResponse(body) {
         result: result,
         life: life,
         total: total
+    };
+}
+
+/**
+ * Parse GetLogInfoResponse.
+ * Wire format: <3I> = uint32 totalCnt, uint32 totalSecs, uint32 totalArea (m²)
+ *
+ * @param {Buffer} body
+ * @returns {{totalCnt:number, totalSecs:number, totalAreaM2:number}}
+ */
+function parseGetLogInfoResponse(body) {
+    if (body.length < 12) {
+        throw new Error(`GetLogInfo response too short: ${body.length} bytes`);
+    }
+
+    return {
+        totalCnt: body.readUInt32LE(0),
+        totalSecs: body.readUInt32LE(4),
+        totalAreaM2: body.readUInt32LE(8)
+    };
+}
+
+/**
+ * Parse GetLastLogInfoResponse.
+ * Wire format: <B3IB4I> fixed part (30 bytes) + variable-length arrays.
+ *
+ * Fields:
+ *   worktype (u8), worktime (u32), workarea (u32, dm²), extraArea (u32, dm²),
+ *   waterboxType (u8), startTime.secs (u32), startTime.nsecs (u32),
+ *   workid (u32), totalAvoidCnt (u32)
+ *
+ * @param {Buffer} body
+ * @returns {{worktype:number, worktime:number, workareaDm2:number, extraAreaDm2:number, waterboxType:number, startTimeSecs:number}}
+ */
+function parseGetLastLogInfoResponse(body) {
+    if (body.length < 30) {
+        throw new Error(`GetLastLogInfo response too short: ${body.length} bytes`);
+    }
+
+    let offset = 0;
+    const worktype = body.readUInt8(offset);
+    offset += 1;
+    const worktime = body.readUInt32LE(offset);
+    offset += 4;
+    const workarea = body.readUInt32LE(offset);
+    offset += 4;
+    const extraArea = body.readUInt32LE(offset);
+    offset += 4;
+    const waterboxType = body.readUInt8(offset);
+    offset += 1;
+    const startTimeSecs = body.readUInt32LE(offset);
+
+    return {
+        worktype: worktype,
+        worktime: worktime,
+        workareaDm2: workarea,
+        extraAreaDm2: extraArea,
+        waterboxType: waterboxType,
+        startTimeSecs: startTimeSecs
     };
 }
 

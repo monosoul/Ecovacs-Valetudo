@@ -52,6 +52,8 @@ does not rely on Python helper scripts for runtime robot control.
 | Segment cleaning | `EcovacsMapSegmentationCapability` | Per-room cleaning, per-room preferences (suction/water/times), room cleaning order |
 | Zone cleaning | `EcovacsZoneCleaningCapability` | Clean arbitrary rectangular zones |
 | Virtual restrictions | `EcovacsCombinedVirtualRestrictionsCapability` | No-go zones, no-mop zones, and line virtual walls |
+| Total statistics | `EcovacsTotalStatisticsCapability` | All-time cleaning count, time, area |
+| Current statistics | `EcovacsCurrentStatisticsCapability` | Last/current session time and area |
 | Quirks | `QuirksCapability` | Toggle settings: auto-collect, room cleaning preferences |
 
 ## Connection Model
@@ -72,6 +74,8 @@ command services to avoid holding sockets open.
 | work control | `/task/WorkManage` | short-lived |
 | settings | `/setting/SettingManage` | short-lived |
 | lifespan | `/lifespan/lifespan` | short-lived |
+| total statistics | `/worklog/GetLogInfo` | short-lived |
+| last clean stats | `/worklog/GetLastLogInfo` | short-lived |
 
 Each service definition lists multiple candidate endpoint names to handle
 different firmware naming conventions. The first one that resolves via the
@@ -99,9 +103,16 @@ If the stream dies, it reconnects in a loop and keeps the latest fresh pose in m
 - `/task/WorkState` (robot work lifecycle: idle/running/paused + worktype)
 - `/power/Battery`
 - `/power/ChargeState`
+- `/worklog/WorkStatisticToWifi` (live cleaning time/area during active sessions)
 
 These topic values are used to keep Valetudo status and battery attributes in sync,
 including reporting `docked` when the robot is on the charger.
+
+The WorkStatistic subscriber uses `safeResolve` mode, which resolves the topic
+endpoint via `getSystemState` + `lookupNode` + `requestTopic` only. It never
+calls `registerSubscriber`, which crashes the firmware's medusa process via an
+unexpected `publisherUpdate` callback. This topic only has publishers during
+active cleaning; when idle, the subscriber retries every 10 seconds.
 
 ### Local non-ROS commands
 
@@ -274,21 +285,27 @@ control session code (if manual control is desired):
 ### Running
 
 Save the config as `valetudo_config.json` and point Valetudo at it.
-Use `nohup` with output redirected so it survives SSH disconnects:
+Use a subshell with output redirected so it survives SSH disconnects:
 
 ```sh
-nohup env VALETUDO_CONFIG_PATH=/data/valetudo_config.json /data/valetudo > /tmp/valetudo_stdout.log 2>&1 &
+(VALETUDO_CONFIG_PATH=/data/valetudo_config.json /data/valetudo > /tmp/valetudo_stdout.log 2>&1 &)
 ```
 
-Without `nohup` and redirection, disconnecting the SSH session kills the
+The parentheses run the command in a subshell. The `&` backgrounds it
+within that subshell, so the child is not part of the terminal's process
+group and won't receive SIGHUP when the SSH session ends.
+
+Without output redirection, disconnecting the SSH session kills the
 controlling TTY. Any subsequent write to stdout/stderr (e.g. from
 `execSync` in NTP time sync) will fail with `EIO` and crash the process.
+
+The robot uses BusyBox, which has neither `nohup` nor `setsid`.
 
 Valetudo writes its own application log to `/tmp/valetudo.log`.
 The `valetudo_stdout.log` file captures any additional output that goes
 directly to stdout/stderr.
 
-For a startup script (no TTY), `nohup` is not needed — just redirect and
+For a startup script (no TTY), `setsid` is not needed - just redirect and
 background:
 
 ```sh

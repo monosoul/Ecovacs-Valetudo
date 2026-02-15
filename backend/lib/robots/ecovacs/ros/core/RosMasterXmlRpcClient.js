@@ -77,6 +77,27 @@ class RosMasterXmlRpcClient {
     }
 
     /**
+     * Resolve a topic TCP endpoint using only getSystemState + lookupNode +
+     * requestTopic.  Unlike resolveTopicTcpEndpoint this never calls
+     * registerSubscriber, which can crash some firmware nodes (e.g. medusa)
+     * via an unexpected publisherUpdate callback.
+     *
+     * Returns null when the topic has no publishers (e.g. robot is idle).
+     *
+     * @param {string} callerId
+     * @param {string} topic
+     * @returns {Promise<{host:string,port:number}|null>}
+     */
+    async resolveTopicTcpEndpointSafe(callerId, topic) {
+        const publishers = await this.getTopicPublishers(callerId, topic);
+        if (publishers.length === 0) {
+            return null;
+        }
+
+        return await this.resolveTopicFromPublishers(callerId, topic, publishers);
+    }
+
+    /**
      * @param {string} callerId
      * @param {string} topic
      * @returns {Promise<Array<string>>}

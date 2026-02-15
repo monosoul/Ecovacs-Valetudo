@@ -161,6 +161,8 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.registerCapability(new capabilities.EcovacsMapSegmentationCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsZoneCleaningCapability({robot: this}));
         this.registerCapability(new capabilities.EcovacsCombinedVirtualRestrictionsCapability({robot: this}));
+        this.registerCapability(new capabilities.EcovacsTotalStatisticsCapability({robot: this}));
+        this.registerCapability(new capabilities.EcovacsCurrentStatisticsCapability({robot: this}));
 
         const quirkFactory = new EcovacsQuirkFactory({
             robot: this

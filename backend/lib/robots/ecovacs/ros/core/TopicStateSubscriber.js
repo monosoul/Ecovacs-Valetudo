@@ -16,6 +16,7 @@ class TopicStateSubscriber {
      * @param {number} [options.connectTimeoutMs]
      * @param {number} [options.readTimeoutMs]
      * @param {number} [options.reconnectDelayMs]
+     * @param {boolean} [options.safeResolve] - use resolveTopicTcpEndpointSafe (no registerSubscriber fallback)
      * @param {(msg: string, err?: any) => void} [options.onWarn]
      */
     constructor(options) {
@@ -28,6 +29,7 @@ class TopicStateSubscriber {
         this.connectTimeoutMs = options.connectTimeoutMs ?? 4000;
         this.readTimeoutMs = options.readTimeoutMs ?? 5000;
         this.reconnectDelayMs = options.reconnectDelayMs ?? 1500;
+        this.safeResolve = options.safeResolve ?? false;
         this.onWarn = options.onWarn ?? (() => {});
 
         this.running = false;
@@ -74,11 +76,9 @@ class TopicStateSubscriber {
         while (this.running) {
             let socket = null;
             try {
-                const endpoint = await this.masterClient.resolveTopicTcpEndpoint(
-                    this.callerId,
-                    this.topic,
-                    this.type
-                );
+                const endpoint = this.safeResolve ?
+                    await this.masterClient.resolveTopicTcpEndpointSafe(this.callerId, this.topic) :
+                    await this.masterClient.resolveTopicTcpEndpoint(this.callerId, this.topic, this.type);
                 if (!endpoint) {
                     await delay(this.reconnectDelayMs);
                     continue;
@@ -231,9 +231,36 @@ function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+/**
+ * Decode worklog/WorkStatisticToWifi topic message.
+ * Wire format: <B3IB2I> = 22 bytes
+ *   worktype (u8), worktime (u32 seconds), workarea (u32 dm²),
+ *   extraArea (u32 dm²), waterboxType (u8),
+ *   startTime.secs (u32), startTime.nsecs (u32)
+ *
+ * @param {Buffer} payload
+ * @returns {{worktype:number, worktime:number, workareaDm2:number, extraAreaDm2:number, waterboxType:number, startTimeSecs:number}|null}
+ */
+function decodeWorkStatisticToWifi(payload) {
+    if (!Buffer.isBuffer(payload) || payload.length < 22) {
+        return null;
+    }
+    const cursor = new BinaryCursor(payload);
+
+    return {
+        worktype: cursor.readUInt8(),
+        worktime: cursor.readUInt32LE(),
+        workareaDm2: cursor.readUInt32LE(),
+        extraAreaDm2: cursor.readUInt32LE(),
+        waterboxType: cursor.readUInt8(),
+        startTimeSecs: cursor.readUInt32LE()
+    };
+}
+
 module.exports = {
     TopicStateSubscriber: TopicStateSubscriber,
     decodePowerBattery: decodePowerBattery,
     decodePowerChargeState: decodePowerChargeState,
-    decodeTaskWorkState: decodeTaskWorkState
+    decodeTaskWorkState: decodeTaskWorkState,
+    decodeWorkStatisticToWifi: decodeWorkStatisticToWifi
 };
