@@ -163,7 +163,7 @@ Per-room settings: suction power, water level, cleaning times.
 Read via `ManipulateSpotArea` GET response (sequence position is a `u8` byte
 in the room metadata gap, immediately after the cleaning preferences). Written
 via `ManipulateSpotArea` SET with `type=5` (17-byte header + 30-byte room block
-per room, with `room_index` at byte 0 and `sequence_position` at byte 29).
+per room, with `areaid` at byte 0 and `sequence_position` at byte 29).
 
 ### Virtual Restrictions
 
@@ -189,6 +189,32 @@ while the live refresh loop updates only entities (robot, charger, trace path).
 Room cleaning preferences and sequence data are cached on the robot instance
 (`cachedRoomCleaningPreferences`) so that the UI reflects values immediately
 after writes, before the next full map poll arrives.
+
+### Room identification (`areaid`)
+
+Each room in the firmware has a unique `areaid` (u32). This value is used as
+Valetudo's `segmentId` — it appears in the UI, in API requests (rename, clean,
+merge, split, preferences), and in map layers.
+
+The `areaid` is extracted from the `GET_SPOTAREAS` binary response by the
+deterministic polygon parser in `EcovacsRosFacade.js`. The room block layout
+before each polygon is:
+
+```
+areaid(u32) + name_len(u32) + name(bytes) + label_id(u8) + point_count(u32) + polygon...
+```
+
+On this firmware `name_len` is always 0 (room names are stored as label enum
+IDs, not strings), so the `areaid` sits at a fixed offset of **9 bytes before
+`point_count`**. The parser derives it from the polygon position rather than
+from a sequential cursor, because the cursor only advances to end-of-polygon
+and does not skip past post-polygon data (connections + preferences). Reading
+at the cursor for rooms after the first would incorrectly read the previous
+room's `connections_count` instead of the real `areaid`.
+
+After merge or split operations the firmware reassigns `areaid`s — it may
+recycle previously released values or allocate new ones. Valetudo re-reads
+rooms after these operations to pick up the new identifiers.
 
 ## Adding New Features
 
