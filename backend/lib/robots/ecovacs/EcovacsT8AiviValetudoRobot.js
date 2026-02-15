@@ -660,12 +660,26 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             };
         }).filter(room => room.polygonCm.length >= 3);
 
-        const allX = parsedRooms.flatMap(room => room.polygonCm.map(p => p.x));
-        const allY = parsedRooms.flatMap(room => room.polygonCm.map(p => p.y));
-        const minX = Math.min(...allX);
-        const maxX = Math.max(...allX);
-        const minY = Math.min(...allY);
-        const maxY = Math.max(...allY);
+        let minX = Infinity;
+        let maxX = -Infinity;
+        let minY = Infinity;
+        let maxY = -Infinity;
+        for (const room of parsedRooms) {
+            for (const p of room.polygonCm) {
+                if (p.x < minX) {
+                    minX = p.x;
+                }
+                if (p.x > maxX) {
+                    maxX = p.x;
+                }
+                if (p.y < minY) {
+                    minY = p.y;
+                }
+                if (p.y > maxY) {
+                    maxY = p.y;
+                }
+            }
+        }
         const marginCm = pixelSizeCm * 4;
         const mapWidthPx = Math.ceil((maxX - minX + 2 * marginCm) / pixelSizeCm) + 1;
         const mapHeightPx = Math.ceil((maxY - minY + 2 * marginCm) / pixelSizeCm) + 1;
@@ -1389,10 +1403,24 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
  * @returns {Array<[number, number]>}
  */
 function rasterizePolygon(polygon) {
-    const minX = Math.min(...polygon.map(p => p.x));
-    const maxX = Math.max(...polygon.map(p => p.x));
-    const minY = Math.min(...polygon.map(p => p.y));
-    const maxY = Math.max(...polygon.map(p => p.y));
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const p of polygon) {
+        if (p.x < minX) {
+            minX = p.x;
+        }
+        if (p.x > maxX) {
+            maxX = p.x;
+        }
+        if (p.y < minY) {
+            minY = p.y;
+        }
+        if (p.y > maxY) {
+            maxY = p.y;
+        }
+    }
 
     /** @type {Array<[number, number]>} */
     const pixels = [];
