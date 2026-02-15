@@ -7,7 +7,9 @@ class BufferedTcpSocket {
     constructor() {
         /** @type {net.Socket|null} */
         this.socket = null;
-        this.readBuffer = Buffer.alloc(0);
+        /** @type {Array<Buffer>} */
+        this.readChunks = [];
+        this.readBufferLength = 0;
         this.pendingRead = null;
         this.closed = false;
     }
@@ -21,7 +23,8 @@ class BufferedTcpSocket {
     async connect(host, port, timeoutMs) {
         await this.close();
         this.closed = false;
-        this.readBuffer = Buffer.alloc(0);
+        this.readChunks = [];
+        this.readBufferLength = 0;
 
         await new Promise((resolve, reject) => {
             const socket = net.createConnection({host: host, port: port});
@@ -30,7 +33,8 @@ class BufferedTcpSocket {
             const onConnect = () => {
                 cleanup();
                 socket.on("data", chunk => {
-                    this.readBuffer = Buffer.concat([this.readBuffer, chunk]);
+                    this.readChunks.push(chunk);
+                    this.readBufferLength += chunk.length;
                     this.drainPendingRead();
                 });
                 socket.on("error", err => {
@@ -105,11 +109,8 @@ class BufferedTcpSocket {
             throw new Error("Concurrent readExact is not supported");
         }
 
-        if (this.readBuffer.length >= length) {
-            const out = this.readBuffer.subarray(0, length);
-            this.readBuffer = this.readBuffer.subarray(length);
-
-            return out;
+        if (this.readBufferLength >= length) {
+            return this.consumeFromReadBuffer(length);
         }
 
         return await new Promise((resolve, reject) => {
@@ -141,16 +142,41 @@ class BufferedTcpSocket {
         if (!this.pendingRead) {
             return;
         }
-        if (this.readBuffer.length < this.pendingRead.length) {
+        if (this.readBufferLength < this.pendingRead.length) {
             return;
         }
 
         const pending = this.pendingRead;
         this.pendingRead = null;
+        pending.resolve(this.consumeFromReadBuffer(pending.length));
+    }
 
-        const out = this.readBuffer.subarray(0, pending.length);
-        this.readBuffer = this.readBuffer.subarray(pending.length);
-        pending.resolve(out);
+    /**
+     * Compact the chunk array into a single buffer, extract the requested
+     * number of bytes and keep the remainder (if any) as a single chunk.
+     *
+     * @param {number} length
+     * @returns {Buffer}
+     */
+    consumeFromReadBuffer(length) {
+        let buf;
+        if (this.readChunks.length === 1) {
+            buf = this.readChunks[0];
+        } else {
+            buf = Buffer.concat(this.readChunks, this.readBufferLength);
+        }
+
+        const out = buf.subarray(0, length);
+        const remaining = buf.length - length;
+        if (remaining > 0) {
+            this.readChunks = [buf.subarray(length)];
+            this.readBufferLength = remaining;
+        } else {
+            this.readChunks = [];
+            this.readBufferLength = 0;
+        }
+
+        return out;
     }
 
     /**
