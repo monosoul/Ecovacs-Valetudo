@@ -86,7 +86,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.lastTraceMapId = null;
         /** @type {Object<string, {suction: number, water: number, times: number, sequence: number}>} */
         this.cachedRoomCleaningPreferences = {};
-        this.activeMapId = 0;
+        this.activeMapId = null;
         this.tracePathWarningShown = false;
         this.rosFacade = new EcovacsRosFacade({
             masterUri: implementationSpecificConfig.rosMasterUri,
@@ -185,22 +185,39 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         super.startup();
         Logger.info("Ecovacs ROS backend mode enabled");
 
-        setTimeout(() => {
-            this.pollMap();
-        }, 2000);
+        // Start ROS facade and fetch initial map ID before starting polls
+        void this.rosFacade.startup().then(async () => {
+            try {
+                Logger.debug("Ecovacs: fetching initial active map ID");
+                const activeMapId = await this.rosFacade.getActiveMapId();
+                if (activeMapId !== null) {
+                    this.activeMapId = activeMapId;
+                    Logger.info(`Ecovacs: initial active map ID is ${activeMapId}`);
+                } else {
+                    Logger.warn("Ecovacs: no active map ID available at startup");
+                }
+            } catch (e) {
+                Logger.warn("Ecovacs: failed to fetch initial active map ID", e);
+            }
 
-        void this.rosFacade.startup();
+            // Start all timers after we have the initial map ID
+            setTimeout(() => {
+                this.pollMap();
+            }, 2000);
 
-        this.livePositionPollTimer = setInterval(() => {
-            void this.refreshLiveMapEntities();
-        }, this.livePositionPollIntervalMs);
-        this.powerStatePollTimer = setInterval(() => {
-            this.refreshRuntimeState();
-        }, this.powerStatePollIntervalMs);
-        this.cleaningSettingsPollTimer = setInterval(() => {
+            this.livePositionPollTimer = setInterval(() => {
+                void this.refreshLiveMapEntities();
+            }, this.livePositionPollIntervalMs);
+            this.powerStatePollTimer = setInterval(() => {
+                this.refreshRuntimeState();
+            }, this.powerStatePollIntervalMs);
+            this.cleaningSettingsPollTimer = setInterval(() => {
+                void this.refreshCleaningSettingsState();
+            }, this.cleaningSettingsPollIntervalMs);
             void this.refreshCleaningSettingsState();
-        }, this.cleaningSettingsPollIntervalMs);
-        void this.refreshCleaningSettingsState();
+        }).catch((e) => {
+            Logger.error("Ecovacs: ROS facade startup failed, timers not started", e);
+        });
     }
 
     /**
@@ -212,13 +229,15 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         try {
             const requestedMapId = this.getActiveMapId();
             Logger.debug(`Ecovacs map poll: fetching rooms (mapId=${requestedMapId})`);
-            let roomDump = await this.rosFacade.getRooms(requestedMapId);
-            if ((!Array.isArray(roomDump?.rooms) || roomDump.rooms.length === 0) && requestedMapId !== 0) {
-                Logger.debug("Ecovacs map poll: rooms empty for active map, retrying with mapId=0");
-                roomDump = await this.rosFacade.getRooms(0);
-            }
+            const roomDump = await this.rosFacade.getRooms(requestedMapId);
+
+            // Update activeMapId from the rooms response
             if (Number.isInteger(roomDump?.header?.mapid)) {
-                this.activeMapId = roomDump.header.mapid >>> 0;
+                const responseMapId = roomDump.header.mapid >>> 0;
+                if (this.activeMapId !== responseMapId) {
+                    Logger.info(`Ecovacs: active map ID changed from ${this.activeMapId} to ${responseMapId}`);
+                    this.activeMapId = responseMapId;
+                }
             }
             const mapId = this.getActiveMapId();
 
@@ -287,6 +306,16 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 } else {
                     Logger.debug("Ecovacs map poll: fetching compressed map");
                     const compressedRaw = await this.rosFacade.getCompressedMap(mapId);
+
+                    // Update activeMapId from the compressed map response
+                    if (Number.isInteger(compressedRaw?.mapid)) {
+                        const responseMapId = compressedRaw.mapid >>> 0;
+                        if (this.activeMapId !== responseMapId) {
+                            Logger.info(`Ecovacs: active map ID changed from ${this.activeMapId} to ${responseMapId} (from compressed map)`);
+                            this.activeMapId = responseMapId;
+                        }
+                    }
+
                     Logger.debug("Ecovacs map poll: decoding compressed map submaps");
                     compressedMap = decodeCompressedMapResponse(compressedRaw);
                     this.cachedCompressedMap = compressedMap;
@@ -946,7 +975,10 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
      * @returns {number}
      */
     getActiveMapId() {
-        return Number.isInteger(this.activeMapId) ? (this.activeMapId >>> 0) : 0;
+        if (!Number.isInteger(this.activeMapId)) {
+            throw new Error("Active map ID is not initialized. Wait for robot to be ready.");
+        }
+        return this.activeMapId >>> 0;
     }
 
     /**

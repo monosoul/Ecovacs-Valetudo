@@ -21,6 +21,10 @@ const SERVICES = {
         md5: "17d5f22724c41493b1778b9d79687330",
         candidates: ["/map/GetCurrentCompressMap", "/map/getCurrentCompressMap", "/map/get_current_compress_map"]
     },
+    mapInfos: {
+        md5: "2ebf09047aac00d6fc33c09a6a883453",
+        candidates: ["/map/ManipulateMapInfos", "/map/manipulateMapInfos", "/map/manipulate_map_infos"]
+    },
     spotArea: {
         md5: "1f749a4ee1df1b94d34bf35bc2c05e3b",
         candidates: ["/map/ManipulateSpotArea", "/map/manipulateSpotArea", "/map/manipulate_spot_area"]
@@ -145,6 +149,7 @@ class EcovacsRosFacade {
         };
 
         this.mapClient = makeClient("map");
+        this.mapInfosClient = makeClient("mapInfos", {persistent: false});
         this.spotAreaClient = makeClient("spotArea");
         this.chargerClient = makeClient("charger");
         this.traceClient = makeClient("trace");
@@ -208,6 +213,7 @@ class EcovacsRosFacade {
         await this.chargeStateSubscriber.shutdown();
         await this.workStateSubscriber.shutdown();
         await this.mapClient.shutdown();
+        await this.mapInfosClient.shutdown();
         await this.spotAreaClient.shutdown();
         await this.chargerClient.shutdown();
         await this.traceClient.shutdown();
@@ -238,6 +244,21 @@ class EcovacsRosFacade {
             chargeState: this.chargeStateSubscriber.getLatestValue(staleMs),
             workState: this.workStateSubscriber.getLatestValue(staleMs)
         };
+    }
+
+    /**
+     * Get the active map ID from the robot by calling /map/ManipulateMapInfos.
+     * Returns the mapid of the active map, or null if no active map is found.
+     *
+     * @returns {Promise<number|null>}
+     */
+    async getActiveMapId() {
+        const request = Buffer.alloc(1);
+        request.writeUInt8(0, 0); // type=0 means GET_MUTI_MAPINFOS
+
+        const body = await this.mapInfosClient.call(request);
+
+        return parseActiveMapIdFromMapInfos(body);
     }
 
     /**
@@ -989,6 +1010,74 @@ class EcovacsRosFacade {
             return await this.spotAreaClient.call(buildSpotAreaMinimalGetRequest(mapId));
         }
     }
+}
+
+/**
+ * Parse ManipulateMapInfos response to extract the active map ID.
+ *
+ * Wire format (firmware-specific, differs from genpy definition):
+ *   result  (u8)
+ *   count   (u32)   - number of map slots (typically 4)
+ *   For each entry:
+ *     mapid         (u32)
+ *     extra_id      (u32)   - firmware-added field not in .msg definition
+ *     isActive      (u8)
+ *     slot_index    (u8)    - 0-based slot index
+ *     isRecentMap   (u8)
+ *     mapName       (u32 length + chars)  - ROS string
+ *
+ * @param {Buffer} body
+ * @returns {number|null} Active map ID, or null if none found
+ */
+function parseActiveMapIdFromMapInfos(body) {
+    if (body.length < 5) {
+        Logger.warn("ManipulateMapInfos response too short");
+        return null;
+    }
+
+    const cursor = new BinaryCursor(body);
+    const result = cursor.readUInt8();
+    const count = cursor.readUInt32LE();
+
+    if (result !== 0) {
+        Logger.warn(`ManipulateMapInfos returned error result: ${result}`);
+        return null;
+    }
+
+    for (let i = 0; i < count; i++) {
+        if (cursor.remaining() < 11) {
+            Logger.warn(`ManipulateMapInfos entry ${i} truncated at fixed fields`);
+            break;
+        }
+
+        const mapid = cursor.readUInt32LE();
+        const extraId = cursor.readUInt32LE();
+        const isActive = cursor.readUInt8();
+        const slotIndex = cursor.readUInt8();
+        cursor.readUInt8(); // isRecentMap - not used
+
+        // Read ROS string: u32 length + data
+        if (cursor.remaining() < 4) {
+            Logger.warn(`ManipulateMapInfos entry ${i} truncated at mapName length`);
+            break;
+        }
+        const nameLen = cursor.readUInt32LE();
+        if (cursor.remaining() < nameLen) {
+            Logger.warn(`ManipulateMapInfos entry ${i} truncated at mapName data`);
+            break;
+        }
+        const nameBuffer = cursor.readBuffer(nameLen);
+        const mapName = nameBuffer.toString("utf8");
+
+        // Check if this is the active map
+        if (isActive === 1 && mapid !== 0) {
+            Logger.debug(`Found active map: id=${mapid}, name="${mapName}", slot=${slotIndex}, extraId=0x${extraId.toString(16)}`);
+            return mapid;
+        }
+    }
+
+    Logger.warn("No active map found in ManipulateMapInfos response");
+    return null;
 }
 
 /**
