@@ -2,6 +2,7 @@
 
 const http = require("http");
 const https = require("https");
+const Logger = require("../../../../Logger");
 const {URL} = require("url");
 
 class RosMasterXmlRpcClient {
@@ -37,7 +38,7 @@ class RosMasterXmlRpcClient {
                     };
                 }
             } catch (e) {
-                // try next candidate
+                Logger.debug(`ROS lookupService failed for ${serviceName}: ${e?.message ?? e}`);
             }
         }
 
@@ -142,7 +143,7 @@ class RosMasterXmlRpcClient {
                 continue;
             }
 
-            const nodeUri = String(lookupNodeResult[2] ?? "");
+            const nodeUri = normalizeLocalhostUri(String(lookupNodeResult[2] ?? ""));
             if (!nodeUri) {
                 continue;
             }
@@ -160,7 +161,7 @@ class RosMasterXmlRpcClient {
             }
 
             return {
-                host: String(protocolParams[1]),
+                host: normalizeRosHost(String(protocolParams[1])),
                 port: Number(protocolParams[2])
             };
         }
@@ -216,6 +217,29 @@ class RosMasterXmlRpcClient {
 }
 
 /**
+ * ROS nodes typically bind IPv4 only.  Node.js may resolve "localhost"
+ * to ::1 (IPv6) first, causing connection timeouts when the peer has
+ * no IPv6 listener.  Normalise to the IPv4 loopback address.
+ *
+ * @param {string} host
+ * @returns {string}
+ */
+function normalizeRosHost(host) {
+    return host === "localhost" ? "127.0.0.1" : host;
+}
+
+/**
+ * Replace "localhost" with "127.0.0.1" in an HTTP URI so that
+ * Node.js connects over IPv4.
+ *
+ * @param {string} uri
+ * @returns {string}
+ */
+function normalizeLocalhostUri(uri) {
+    return uri.replace("://localhost", "://127.0.0.1");
+}
+
+/**
  * @param {string} uri
  * @returns {{host:string,port:number}|null}
  */
@@ -230,7 +254,7 @@ function parseRosRpcUri(uri) {
     }
 
     return {
-        host: raw.slice(0, separator),
+        host: normalizeRosHost(raw.slice(0, separator)),
         port: Number(raw.slice(separator + 1))
     };
 }
