@@ -19,6 +19,7 @@ const REMOTE_MOVE_STOP = 2;
 const REMOTE_TURN_W = 87;
 const SOUND_I_AM_HERE = 30;
 const SOUND_BEEP = 17;
+const PIXEL_KEY_STRIDE = 65536;
 const DEFAULT_RUNTIME_STATE_CACHE_PATH = "/tmp/valetudo_ecovacs_runtime_state.json";
 const WORK_STATE = {
     IDLE: 0,
@@ -689,7 +690,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             }
 
             pixels.forEach(pixel => {
-                floorPixelSet.add(`${pixel[0]}:${pixel[1]}`);
+                floorPixelSet.add(pixel[0] * PIXEL_KEY_STRIDE + pixel[1]);
             });
 
             segmentLayers.push(new mapEntities.MapLayer({
@@ -699,18 +700,11 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             }));
         });
 
-        const roomFloorPixels = Array.from(floorPixelSet).map(entry => {
-            const [x, y] = entry.split(":");
-
-            return [Number(x), Number(y)];
-        });
-        const roomFloorSet = new Set(roomFloorPixels.map(([x, y]) => `${x}:${y}`));
-
-        let rasterFloorPixels = roomFloorPixels;
+        let rasterFloorPixels = unpackPixelKeys(floorPixelSet);
         let rasterWallPixels = [];
         if (compressedMap) {
             try {
-                const projected = projectCompressedMapToGrid(compressedMap, mapWidthPx, mapHeightPx, roomFloorSet);
+                const projected = projectCompressedMapToGrid(compressedMap, mapWidthPx, mapHeightPx, floorPixelSet);
                 if (projected.floorPixels.length > 0) {
                     rasterFloorPixels = projected.floorPixels;
                 }
@@ -1601,7 +1595,7 @@ function inferCompressedMapPixelSizeCm(raw) {
  * @param {{width:number,height:number,floorPixels:Array<[number,number]>,wallPixels:Array<[number,number]>}} compressedMap
  * @param {number} targetWidth
  * @param {number} targetHeight
- * @param {Set<string>} roomFloorSet
+ * @param {Set<number>} roomFloorSet  packed pixel keys (x * PIXEL_KEY_STRIDE + y)
  * @returns {{floorPixels:Array<[number,number]>,wallPixels:Array<[number,number]>}}
  */
 function projectCompressedMapToGrid(compressedMap, targetWidth, targetHeight, roomFloorSet) {
@@ -1613,32 +1607,33 @@ function projectCompressedMapToGrid(compressedMap, targetWidth, targetHeight, ro
     for (const [sx, sy] of compressedMap.floorPixels) {
         const p = projectSourcePointToTarget(sx, sy, compressedMap.width, compressedMap.height, targetWidth, targetHeight, orientation);
         if (p) {
-            floorSet.add(`${p[0]}:${p[1]}`);
+            floorSet.add(p[0] * PIXEL_KEY_STRIDE + p[1]);
         }
     }
     for (const [sx, sy] of compressedMap.wallPixels) {
         const p = projectSourcePointToTarget(sx, sy, compressedMap.width, compressedMap.height, targetWidth, targetHeight, orientation);
         if (p) {
-            wallSet.add(`${p[0]}:${p[1]}`);
+            wallSet.add(p[0] * PIXEL_KEY_STRIDE + p[1]);
         }
     }
 
-    const result = {
-        floorPixels: Array.from(floorSet).map(splitPixelKey),
-        wallPixels: Array.from(wallSet).map(splitPixelKey)
-    };
+    const floorPixels = unpackPixelKeys(floorSet);
+    const wallPixels = unpackPixelKeys(wallSet);
     Logger.debug(
-        `Ecovacs compressed map projection: orientation=${orientation}, floor=${result.floorPixels.length}, wall=${result.wallPixels.length}, took=${Date.now() - projectionStartedAt}ms`
+        `Ecovacs compressed map projection: orientation=${orientation}, floor=${floorPixels.length}, wall=${wallPixels.length}, took=${Date.now() - projectionStartedAt}ms`
     );
 
-    return result;
+    return {
+        floorPixels: floorPixels,
+        wallPixels: wallPixels
+    };
 }
 
 /**
  * @param {{width:number,height:number,floorPixels:Array<[number,number]>}} compressedMap
  * @param {number} targetWidth
  * @param {number} targetHeight
- * @param {Set<string>} roomFloorSet
+ * @param {Set<number>} roomFloorSet  packed pixel keys (x * PIXEL_KEY_STRIDE + y)
  * @returns {number}
  */
 function chooseBestProjectionOrientation(compressedMap, targetWidth, targetHeight, roomFloorSet) {
@@ -1665,7 +1660,7 @@ function chooseBestProjectionOrientation(compressedMap, targetWidth, targetHeigh
                 continue;
             }
             checked++;
-            if (roomFloorSet.has(`${p[0]}:${p[1]}`)) {
+            if (roomFloorSet.has(p[0] * PIXEL_KEY_STRIDE + p[1])) {
                 score++;
             }
         }
@@ -1740,13 +1735,18 @@ function orientPoint(x, y, width, height, orientation) {
 }
 
 /**
- * @param {string} key
- * @returns {[number, number]}
+ * Unpack a Set of numeric pixel keys (x * PIXEL_KEY_STRIDE + y) into an array of [x, y] tuples.
+ *
+ * @param {Set<number>} set
+ * @returns {Array<[number, number]>}
  */
-function splitPixelKey(key) {
-    const [x, y] = key.split(":");
+function unpackPixelKeys(set) {
+    const result = [];
+    for (const key of set) {
+        result.push([(key / PIXEL_KEY_STRIDE) | 0, key % PIXEL_KEY_STRIDE]);
+    }
 
-    return [Number(x), Number(y)];
+    return result;
 }
 
 /**
