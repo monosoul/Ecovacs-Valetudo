@@ -257,10 +257,89 @@ function decodeWorkStatisticToWifi(payload) {
     };
 }
 
+/**
+ * Alert type IDs from the robot's alert/AlertType message definition.
+ * state: 0 = idle, 1 = triggered.
+ *
+ * @readonly
+ * @enum {number}
+ */
+const ALERT_TYPE = Object.freeze({
+    DIRT_BOX_STATE: 0,
+    WATER_BOX_STATE: 1,
+    FALL_ERROR: 2,
+    BRUSH_CURRENT_STATE_ERROR: 3,
+    SIDE_BRUSH_CURRENT_ERROR: 4,
+    LEFT_WHEEL_CURRENT_ERROR: 5,
+    RIGHT_WHEEL_CURRENT_ERROR: 6,
+    DOWNIN_ERROR: 7,
+    BRUSH_CURRENT_LARGE_CURRENT_WARNING: 8,
+    SIDE_BRUSH_CURRENT_LARGE_CURRENT_WARNING: 9,
+    LEFT_SIDE_BRUSH_CURRENT_LARGE_CURRENT_WARNING: 10,
+    RIGHT_SIDE_BRUSH_CURRENT_LARGE_CURRENT_WARNING: 11,
+    FALL_STATE_WARNING: 12,
+    LEFT_WHEEL_CURRENT_LARGE_CURRENT_WARNING: 13,
+    RIGHT_WHEEL_CURRENT_LARGE_CURRENT_WARNING: 14,
+    LEFT_BUMP_REPEAT_TRIGE_WARNING: 15,
+    RIGHT_BUMP_REPEAT_TRIGE_WARNING: 16,
+    BUMP_LONG_TIMER_TRIGE_WARNING: 17,
+    BUMP_LONG_TIMER_TRIGE_ERROR: 18,
+    BUMP_LONG_TIMER_NO_TRIGE_ERROR: 19,
+    DEGREE_NO_CHANGE_WARNING: 20,
+    DEGREE_NO_CHANGE_ERROR: 21,
+    LEFT_WHEEL_SPEED_ERROR: 22,
+    RIGHT_WHEEL_SPEED_ERROR: 23,
+    FAN_SPEED_ERROR: 24,
+    POSE_NO_CHANGE_WARNING: 25,
+    ROLL_GESTURE_SLOPE_WARNING: 26,
+    PITCH_GESTURE_SLOPE_WARNING: 27,
+    ROBOT_BEEN_MOVED_DURING_IDLE: 28,
+    NO_RETURN_CHARGE_WARNING: 29,
+    FAN_SPEED_STATE_CHANGED_WARNING: 30,
+    ROBOT_STUCK_ERROR: 31,
+    LDS_ERROR: 32,
+    ULTRA_WATERBOX_WARNING: 33,
+    ULTRA_WATERBOX_ERROR: 34,
+});
+
+/**
+ * Decode alert/Alerts topic message.
+ * Wire format: u32 count, then count * (u8 type, u8 state).
+ *
+ * Returns an array of triggered alerts (state === 1).
+ *
+ * @param {Buffer} payload
+ * @returns {Array<{type: number, state: number}>|null}
+ */
+function decodeAlertAlerts(payload) {
+    if (!Buffer.isBuffer(payload) || payload.length < 4) {
+        return null;
+    }
+    const cursor = new BinaryCursor(payload);
+    const count = cursor.readUInt32LE();
+
+    if (payload.length < 4 + count * 2) {
+        return null;
+    }
+
+    const triggered = [];
+    for (let i = 0; i < count; i++) {
+        const type = cursor.readUInt8();
+        const state = cursor.readUInt8();
+        if (state === 1) {
+            triggered.push({type, state});
+        }
+    }
+
+    return triggered;
+}
+
 module.exports = {
     TopicStateSubscriber: TopicStateSubscriber,
+    ALERT_TYPE: ALERT_TYPE,
     decodePowerBattery: decodePowerBattery,
     decodePowerChargeState: decodePowerChargeState,
     decodeTaskWorkState: decodeTaskWorkState,
-    decodeWorkStatisticToWifi: decodeWorkStatisticToWifi
+    decodeWorkStatisticToWifi: decodeWorkStatisticToWifi,
+    decodeAlertAlerts: decodeAlertAlerts
 };

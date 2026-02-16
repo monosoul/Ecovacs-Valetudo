@@ -7,10 +7,12 @@ const PredictionPoseSubscriber = require("../core/PredictionPoseSubscriber");
 const RosMasterXmlRpcClient = require("../core/RosMasterXmlRpcClient");
 const {
     TopicStateSubscriber,
+    ALERT_TYPE,
     decodePowerBattery,
     decodePowerChargeState,
     decodeTaskWorkState,
-    decodeWorkStatisticToWifi
+    decodeWorkStatisticToWifi,
+    decodeAlertAlerts
 } = require("../core/TopicStateSubscriber");
 const {labelNameFromId} = require("../../RoomLabels");
 
@@ -222,6 +224,17 @@ class EcovacsRosFacade {
             readTimeoutMs: options.callTimeoutMs,
             onWarn: options.onWarn
         });
+        this.alertSubscriber = new TopicStateSubscriber({
+            masterClient: this.masterClient,
+            callerId: this.callerId,
+            topic: "/alert/Alerts",
+            type: "alert/Alerts",
+            md5: "cc98b954dcec4eb014849fa8ae90fc33",
+            decoder: decodeAlertAlerts,
+            connectTimeoutMs: options.connectTimeoutMs,
+            readTimeoutMs: options.callTimeoutMs,
+            onWarn: options.onWarn
+        });
     }
 
     async startup() {
@@ -230,7 +243,8 @@ class EcovacsRosFacade {
             this.batterySubscriber.start(),
             this.chargeStateSubscriber.start(),
             this.workStateSubscriber.start(),
-            this.workStatisticSubscriber.start()
+            this.workStatisticSubscriber.start(),
+            this.alertSubscriber.start()
         ]);
     }
 
@@ -241,6 +255,7 @@ class EcovacsRosFacade {
             this.chargeStateSubscriber.shutdown(),
             this.workStateSubscriber.shutdown(),
             this.workStatisticSubscriber.shutdown(),
+            this.alertSubscriber.shutdown(),
             this.mapClient.shutdown(),
             this.mapInfosClient.shutdown(),
             this.spotAreaClient.shutdown(),
@@ -276,6 +291,17 @@ class EcovacsRosFacade {
             chargeState: this.chargeStateSubscriber.getLatestValue(staleMs),
             workState: this.workStateSubscriber.getLatestValue(staleMs)
         };
+    }
+
+    /**
+     * Get the latest triggered alerts from the /alert/Alerts topic.
+     * Returns an array of triggered alerts (state === 1), or null if stale/unavailable.
+     *
+     * @param {number} staleMs
+     * @returns {Array<{type: number, state: number}>|null}
+     */
+    getTriggeredAlerts(staleMs) {
+        return this.alertSubscriber.getLatestValue(staleMs);
     }
 
     /**
