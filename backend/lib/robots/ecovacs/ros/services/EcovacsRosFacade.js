@@ -1024,7 +1024,7 @@ class EcovacsRosFacade {
      * Get the latest work statistic from the topic subscriber cache.
      *
      * @param {number} staleMs
-     * @returns {{worktype:number, worktime:number, workareaDm2:number, extraAreaDm2:number, waterboxType:number, startTimeSecs:number}|null}
+     * @returns {{worktype:number, worktime:number, workareaM2:number, extraAreaM2:number, waterboxType:number, startTimeSecs:number}|null}
      */
     getWorkStatistic(staleMs) {
         return this.workStatisticSubscriber.getLatestValue(staleMs);
@@ -1046,7 +1046,7 @@ class EcovacsRosFacade {
     /**
      * Get last cleaning session statistics from /worklog/GetLastLogInfo.
      *
-     * @returns {Promise<{worktype:number, worktime:number, workareaDm2:number, extraAreaDm2:number, waterboxType:number, startTimeSecs:number}>}
+     * @returns {Promise<{worktype:number, worktime:number, workareaM2:number, extraAreaM2:number, waterboxType:number, startTimeSecs:number}>}
      */
     async getLastCleanStatistics() {
         const request = Buffer.alloc(1);
@@ -1863,12 +1863,12 @@ function parseGetLogInfoResponse(body) {
  * Wire format: <B3IB4I> fixed part (30 bytes) + variable-length arrays.
  *
  * Fields:
- *   worktype (u8), worktime (u32), workarea (u32, dm²), extraArea (u32, dm²),
+ *   worktype (u8), worktime (u32), workarea (u32, m²), extraArea (u32, m²),
  *   waterboxType (u8), startTime.secs (u32), startTime.nsecs (u32),
  *   workid (u32), totalAvoidCnt (u32)
  *
  * @param {Buffer} body
- * @returns {{worktype:number, worktime:number, workareaDm2:number, extraAreaDm2:number, waterboxType:number, startTimeSecs:number}}
+ * @returns {{worktype:number, worktime:number, workareaM2:number, extraAreaM2:number, waterboxType:number, startTimeSecs:number}}
  */
 function parseGetLastLogInfoResponse(body) {
     if (body.length < 30) {
@@ -1891,8 +1891,8 @@ function parseGetLastLogInfoResponse(body) {
     return {
         worktype: worktype,
         worktime: worktime,
-        workareaDm2: workarea,
-        extraAreaDm2: extraArea,
+        workareaM2: workarea,
+        extraAreaM2: extraArea,
         waterboxType: waterboxType,
         startTimeSecs: startTimeSecs
     };

@@ -30,7 +30,7 @@ class EcovacsCurrentStatisticsCapability extends CurrentStatisticsCapability {
             }),
             new ValetudoDataPoint({
                 type: ValetudoDataPoint.TYPES.AREA,
-                value: stats.workareaDm2 * 100 // dm² to cm²
+                value: stats.workareaM2 * 10000 // m² to cm²
             })
         ];
     }

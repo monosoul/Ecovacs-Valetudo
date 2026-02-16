@@ -234,12 +234,12 @@ function delay(ms) {
 /**
  * Decode worklog/WorkStatisticToWifi topic message.
  * Wire format: <B3IB2I> = 22 bytes
- *   worktype (u8), worktime (u32 seconds), workarea (u32 dm²),
- *   extraArea (u32 dm²), waterboxType (u8),
+ *   worktype (u8), worktime (u32 seconds), workarea (u32 m²),
+ *   extraArea (u32 m²), waterboxType (u8),
  *   startTime.secs (u32), startTime.nsecs (u32)
  *
  * @param {Buffer} payload
- * @returns {{worktype:number, worktime:number, workareaDm2:number, extraAreaDm2:number, waterboxType:number, startTimeSecs:number}|null}
+ * @returns {{worktype:number, worktime:number, workareaM2:number, extraAreaM2:number, waterboxType:number, startTimeSecs:number}|null}
  */
 function decodeWorkStatisticToWifi(payload) {
     if (!Buffer.isBuffer(payload) || payload.length < 22) {
@@ -250,8 +250,8 @@ function decodeWorkStatisticToWifi(payload) {
     return {
         worktype: cursor.readUInt8(),
         worktime: cursor.readUInt32LE(),
-        workareaDm2: cursor.readUInt32LE(),
-        extraAreaDm2: cursor.readUInt32LE(),
+        workareaM2: cursor.readUInt32LE(),
+        extraAreaM2: cursor.readUInt32LE(),
         waterboxType: cursor.readUInt8(),
         startTimeSecs: cursor.readUInt32LE()
     };
