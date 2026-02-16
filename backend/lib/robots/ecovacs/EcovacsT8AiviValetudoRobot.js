@@ -1,7 +1,6 @@
 const capabilities = require("./capabilities");
 const EcovacsQuirkFactory = require("./EcovacsQuirkFactory");
 const EcovacsRosFacade = require("./ros/services/EcovacsRosFacade");
-const {ALERT_TYPE} = require("./ros/core/TopicStateSubscriber");
 const entities = require("../../entities");
 const fs = require("fs");
 const Logger = require("../../Logger");
@@ -11,6 +10,7 @@ const MdsctlClient = require("./ros/services/MdsctlClient");
 const QuirksCapability = require("../../core/capabilities/QuirksCapability");
 const ValetudoRobot = require("../../core/ValetudoRobot");
 const ValetudoRobotError = require("../../entities/core/ValetudoRobotError");
+const {ALERT_TYPE} = require("./ros/core/TopicStateSubscriber");
 require("./lzmaPurejsPkgIncludes");
 
 const stateAttrs = entities.state.attributes;
@@ -1169,9 +1169,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             }
 
             const triggeredAlerts = this.rosFacade.getTriggeredAlerts();
-            const errorAlert = triggeredAlerts && triggeredAlerts.length > 0
-                ? findMostSevereErrorAlert(triggeredAlerts)
-                : null;
+            const errorAlert = triggeredAlerts && triggeredAlerts.length > 0 ?
+                findMostSevereErrorAlert(triggeredAlerts) :
+                null;
 
             const previousStatus = this.state.getFirstMatchingAttributeByConstructor(stateAttrs.StatusStateAttribute);
             const previousStatusValue = previousStatus?.value;

@@ -7,7 +7,6 @@ const PredictionPoseSubscriber = require("../core/PredictionPoseSubscriber");
 const RosMasterXmlRpcClient = require("../core/RosMasterXmlRpcClient");
 const {
     TopicStateSubscriber,
-    ALERT_TYPE,
     decodePowerBattery,
     decodePowerChargeState,
     decodeTaskWorkState,

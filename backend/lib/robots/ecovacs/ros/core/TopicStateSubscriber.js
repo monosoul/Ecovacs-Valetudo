@@ -327,7 +327,7 @@ function decodeAlertAlerts(payload) {
         const type = cursor.readUInt8();
         const state = cursor.readUInt8();
         if (state === 1) {
-            triggered.push({type, state});
+            triggered.push({type: type, state: state});
         }
     }
 
