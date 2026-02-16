@@ -65,6 +65,45 @@ const SERVICES = {
     }
 };
 
+const TOPICS = {
+    pose: {
+        topic: "/prediction/UpdatePose",
+        type: "prediction/UpdatePose",
+        md5: "fecf0dd688f5c70c9311410640ce79cd",
+        decoder: decodePredictionUpdatePose
+    },
+    battery: {
+        topic: "/power/Battery",
+        type: "power/Battery",
+        md5: "1f868bac590fa9e653b61dc342b25421",
+        decoder: decodePowerBattery
+    },
+    chargeState: {
+        topic: "/power/ChargeState",
+        type: "power/ChargeState",
+        md5: "3f40efefe99d0b54d25afc2ed5523fc0",
+        decoder: decodePowerChargeState
+    },
+    workState: {
+        topic: "/task/WorkState",
+        type: "task/WorkState",
+        md5: "85234983b5d2c6828f53442a64052ae3",
+        decoder: decodeTaskWorkState
+    },
+    workStatistic: {
+        topic: "/worklog/WorkStatisticToWifi",
+        type: "worklog/WorkStatisticToWifi",
+        md5: "a54e1098445f2092ed11f984eeb3cf90",
+        decoder: decodeWorkStatisticToWifi
+    },
+    alerts: {
+        topic: "/alert/Alerts",
+        type: "alert/Alerts",
+        md5: "cc98b954dcec4eb014849fa8ae90fc33",
+        decoder: decodeAlertAlerts
+    }
+};
+
 const WORK_MANAGE_TYPE = {
     START: 0,
     STOP: 1,
@@ -170,74 +209,25 @@ class EcovacsRosFacade {
         this.getLogInfoClient = makeClient("getLogInfo", {persistent: false});
         this.getLastLogInfoClient = makeClient("getLastLogInfo", {persistent: false});
 
-        this.poseSubscriber = new TopicStateSubscriber({
+        const subscriberOpts = {
             masterClient: this.masterClient,
             callerId: this.callerId,
-            topic: "/prediction/UpdatePose",
-            type: "prediction/UpdatePose",
-            md5: "fecf0dd688f5c70c9311410640ce79cd",
-            decoder: decodePredictionUpdatePose,
             connectTimeoutMs: options.connectTimeoutMs,
             readTimeoutMs: options.callTimeoutMs,
             onWarn: options.onWarn
-        });
-        this.batterySubscriber = new TopicStateSubscriber({
-            masterClient: this.masterClient,
-            callerId: this.callerId,
-            topic: "/power/Battery",
-            type: "power/Battery",
-            md5: "1f868bac590fa9e653b61dc342b25421",
-            decoder: decodePowerBattery,
-            connectTimeoutMs: options.connectTimeoutMs,
-            readTimeoutMs: options.callTimeoutMs,
-            onWarn: options.onWarn
-        });
-        this.chargeStateSubscriber = new TopicStateSubscriber({
-            masterClient: this.masterClient,
-            callerId: this.callerId,
-            topic: "/power/ChargeState",
-            type: "power/ChargeState",
-            md5: "3f40efefe99d0b54d25afc2ed5523fc0",
-            decoder: decodePowerChargeState,
-            connectTimeoutMs: options.connectTimeoutMs,
-            readTimeoutMs: options.callTimeoutMs,
-            onWarn: options.onWarn
-        });
-        this.workStateSubscriber = new TopicStateSubscriber({
-            masterClient: this.masterClient,
-            callerId: this.callerId,
-            topic: "/task/WorkState",
-            type: "task/WorkState",
-            md5: "85234983b5d2c6828f53442a64052ae3",
-            decoder: decodeTaskWorkState,
-            connectTimeoutMs: options.connectTimeoutMs,
-            readTimeoutMs: options.callTimeoutMs,
-            onWarn: options.onWarn
-        });
+        };
+
+        this.poseSubscriber = new TopicStateSubscriber({...subscriberOpts, ...TOPICS.pose});
+        this.batterySubscriber = new TopicStateSubscriber({...subscriberOpts, ...TOPICS.battery});
+        this.chargeStateSubscriber = new TopicStateSubscriber({...subscriberOpts, ...TOPICS.chargeState});
+        this.workStateSubscriber = new TopicStateSubscriber({...subscriberOpts, ...TOPICS.workState});
         this.workStatisticSubscriber = new TopicStateSubscriber({
-            masterClient: this.masterClient,
-            callerId: this.callerId,
-            topic: "/worklog/WorkStatisticToWifi",
-            type: "worklog/WorkStatisticToWifi",
-            md5: "a54e1098445f2092ed11f984eeb3cf90",
-            decoder: decodeWorkStatisticToWifi,
+            ...subscriberOpts,
+            ...TOPICS.workStatistic,
             safeResolve: true,
-            reconnectDelayMs: 10_000, // topic only publishes during cleaning; poll less when idle
-            connectTimeoutMs: options.connectTimeoutMs,
-            readTimeoutMs: options.callTimeoutMs,
-            onWarn: options.onWarn
+            reconnectDelayMs: 10_000
         });
-        this.alertSubscriber = new TopicStateSubscriber({
-            masterClient: this.masterClient,
-            callerId: this.callerId,
-            topic: "/alert/Alerts",
-            type: "alert/Alerts",
-            md5: "cc98b954dcec4eb014849fa8ae90fc33",
-            decoder: decodeAlertAlerts,
-            connectTimeoutMs: options.connectTimeoutMs,
-            readTimeoutMs: options.callTimeoutMs,
-            onWarn: options.onWarn
-        });
+        this.alertSubscriber = new TopicStateSubscriber({...subscriberOpts, ...TOPICS.alerts});
     }
 
     async startup() {
