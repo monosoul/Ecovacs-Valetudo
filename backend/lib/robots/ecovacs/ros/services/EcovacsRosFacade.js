@@ -21,47 +21,47 @@ const SPOT_AREA_SEQUENCE_TYPE = 5;
 const SERVICES = {
     map: {
         md5: "17d5f22724c41493b1778b9d79687330",
-        candidates: ["/map/GetCurrentCompressMap", "/map/getCurrentCompressMap", "/map/get_current_compress_map"]
+        name: "/map/GetCurrentCompressMap"
     },
     mapInfos: {
         md5: "2ebf09047aac00d6fc33c09a6a883453",
-        candidates: ["/map/ManipulateMapInfos", "/map/manipulateMapInfos", "/map/manipulate_map_infos"]
+        name: "/map/ManipulateMapInfos"
     },
     spotArea: {
         md5: "1f749a4ee1df1b94d34bf35bc2c05e3b",
-        candidates: ["/map/ManipulateSpotArea", "/map/manipulateSpotArea", "/map/manipulate_spot_area"]
+        name: "/map/ManipulateSpotArea"
     },
     charger: {
         md5: "9cde7b036866c35b41f8cc3957bbf01d",
-        candidates: ["/map/ManipulateCharger", "/map/manipulateCharger", "/map/manipulate_charger"]
+        name: "/map/ManipulateCharger"
     },
     trace: {
         md5: "9760daeffedcd8659af2b5cda59a76c1",
-        candidates: ["/map/ManipulateTrace", "/map/manipulateTrace", "/map/manipulate_trace"]
+        name: "/map/ManipulateTrace"
     },
     virtualWall: {
         md5: "5ac048cd1de2f92de83f97bf5aac52e9",
-        candidates: ["/map/ManipulateVirtualWall", "/map/manipulateVirtualWall", "/map/manipulate_virtual_wall"]
+        name: "/map/ManipulateVirtualWall"
     },
     work: {
         md5: "07877d0b6f69402fce5b6b91983c66f7",
-        candidates: ["/task/WorkManage", "/task/workManage", "/task/work_manage"]
+        name: "/task/WorkManage"
     },
     setting: {
         md5: "9b750807a5def60e40619d50b06ae034",
-        candidates: ["/setting/SettingManage", "/setting/settingManage", "/setting/setting_manage"]
+        name: "/setting/SettingManage"
     },
     lifespan: {
         md5: "35c020f6d3af5b57369fe7f26779c5d8",
-        candidates: ["/lifespan/lifespan", "/lifespan/lifespansrv"]
+        name: "/lifespan/lifespan"
     },
     getLogInfo: {
         md5: "349803b37ad93c0069b0431de1bb30cc",
-        candidates: ["/worklog/GetLogInfo", "/worklog/getLogInfo", "/worklog/get_log_info"]
+        name: "/worklog/GetLogInfo"
     },
     getLastLogInfo: {
         md5: "bf16b43980095bc05ef5a1ac5c002f5a",
-        candidates: ["/worklog/GetLastLogInfo", "/worklog/getLastLogInfo", "/worklog/get_last_log_info"]
+        name: "/worklog/GetLastLogInfo"
     }
 };
 
@@ -149,7 +149,7 @@ class EcovacsRosFacade {
             return new PersistentServiceClient({
                 masterClient: this.masterClient,
                 callerId: this.callerId,
-                serviceCandidates: SERVICES[key].candidates,
+                serviceName: SERVICES[key].name,
                 serviceMd5: SERVICES[key].md5,
                 connectTimeoutMs: options.connectTimeoutMs,
                 callTimeoutMs: options.callTimeoutMs,

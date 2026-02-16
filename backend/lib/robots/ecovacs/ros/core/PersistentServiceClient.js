@@ -9,7 +9,7 @@ class PersistentServiceClient {
      * @param {object} options
      * @param {import("./RosMasterXmlRpcClient")} options.masterClient
      * @param {string} options.callerId
-     * @param {Array<string>} options.serviceCandidates
+     * @param {string} options.serviceName
      * @param {string} options.serviceMd5
      * @param {number} [options.connectTimeoutMs]
      * @param {number} [options.callTimeoutMs]
@@ -18,14 +18,13 @@ class PersistentServiceClient {
     constructor(options) {
         this.masterClient = options.masterClient;
         this.callerId = options.callerId;
-        this.serviceCandidates = options.serviceCandidates;
+        this.serviceName = options.serviceName;
         this.serviceMd5 = options.serviceMd5;
         this.connectTimeoutMs = options.connectTimeoutMs ?? 4000;
         this.callTimeoutMs = options.callTimeoutMs ?? 5000;
         this.persistent = options.persistent ?? true;
         this.debug = options.debug ?? false;
 
-        this.serviceName = null;
         this.socket = null;
         this.lock = Promise.resolve();
     }
@@ -55,7 +54,7 @@ class PersistentServiceClient {
     async callLocked(requestBody) {
         if (this.debug) {
             Logger.debug(
-                `Ecovacs ROS call: service=${this.serviceName ?? this.serviceCandidates[0]} ` +
+                `Ecovacs ROS call: service=${this.serviceName} ` +
                 `persistent=${this.persistent} request_bytes=${requestBody.length}`
             );
         }
@@ -96,16 +95,16 @@ class PersistentServiceClient {
      * @returns {Promise<BufferedTcpSocket>}
      */
     async createConnectedSocket() {
-        const resolved = await this.masterClient.resolveService(this.callerId, this.serviceCandidates);
+        const resolved = await this.masterClient.resolveService(this.callerId, this.serviceName);
         if (!resolved) {
-            throw new Error(`Service not found in candidates: ${this.serviceCandidates.join(", ")}`);
+            throw new Error(`Service not found: ${this.serviceName}`);
         }
 
         const socket = new BufferedTcpSocket();
         await socket.connect(resolved.host, resolved.port, this.connectTimeoutMs);
         if (this.debug) {
             Logger.debug(
-                `Ecovacs ROS connected: service=${resolved.serviceName} endpoint=${resolved.host}:${resolved.port} ` +
+                `Ecovacs ROS connected: service=${this.serviceName} endpoint=${resolved.host}:${resolved.port} ` +
                 `persistent=${this.persistent}`
             );
         }
@@ -113,12 +112,10 @@ class PersistentServiceClient {
             ["callerid", `${this.callerId}'`],
             ["md5sum", this.serviceMd5],
             ["persistent", this.persistent ? "1" : "0"],
-            ["service", resolved.serviceName]
+            ["service", this.serviceName]
         ]);
         await socket.write(handshakePacket);
         await readHandshake(socket, this.callTimeoutMs);
-
-        this.serviceName = resolved.serviceName;
 
         return socket;
     }
@@ -166,7 +163,7 @@ class PersistentServiceClient {
         const responseBody = await socket.readExact(responseLen, this.callTimeoutMs);
         if (this.debug) {
             Logger.debug(
-                `Ecovacs ROS response: service=${this.serviceName ?? this.serviceCandidates[0]} ` +
+                `Ecovacs ROS response: service=${this.serviceName} ` +
                 `ok=${ok} response_bytes=${responseLen}`
             );
         }
@@ -174,7 +171,7 @@ class PersistentServiceClient {
         if (ok !== 1) {
             const errorText = responseBody.toString("utf8");
             Logger.warn(
-                `Ecovacs ROS error response: service=${this.serviceName ?? this.serviceCandidates[0]} ` +
+                `Ecovacs ROS error response: service=${this.serviceName} ` +
                 `persistent=${this.persistent} error=${errorText}`
             );
             throw new Error(`Service error response: ${errorText}`);

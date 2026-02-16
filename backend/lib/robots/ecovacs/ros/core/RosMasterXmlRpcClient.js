@@ -18,31 +18,21 @@ class RosMasterXmlRpcClient {
 
     /**
      * @param {string} callerId
-     * @param {Array<string>} candidates
-     * @returns {Promise<{serviceName:string, host:string, port:number}|null>}
+     * @param {string} serviceName
+     * @returns {Promise<{host:string, port:number}|null>}
      */
-    async resolveService(callerId, candidates) {
-        for (const serviceName of candidates) {
-            try {
-                const response = await this.call(this.masterUri, "lookupService", [callerId, serviceName]);
-                if (!Array.isArray(response) || response.length < 3 || Number(response[0]) !== 1) {
-                    continue;
-                }
-                const uri = String(response[2] ?? "");
-                const parsed = parseRosRpcUri(uri);
-                if (parsed) {
-                    return {
-                        serviceName: serviceName,
-                        host: parsed.host,
-                        port: parsed.port
-                    };
-                }
-            } catch (e) {
-                Logger.debug(`ROS lookupService failed for ${serviceName}: ${e?.message ?? e}`);
+    async resolveService(callerId, serviceName) {
+        try {
+            const response = await this.call(this.masterUri, "lookupService", [callerId, serviceName]);
+            if (!Array.isArray(response) || response.length < 3 || Number(response[0]) !== 1) {
+                return null;
             }
+            const uri = String(response[2] ?? "");
+            return parseRosRpcUri(uri);
+        } catch (e) {
+            Logger.debug(`ROS lookupService failed for ${serviceName}: ${e?.message ?? e}`);
+            return null;
         }
-
-        return null;
     }
 
     /**
