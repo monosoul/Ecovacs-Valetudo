@@ -334,6 +334,49 @@ function decodeAlertAlerts(payload) {
     return triggered;
 }
 
+/**
+ * Decode prediction/UpdatePose: predictPose(Header+xyz) + pose(Header+xyz) + isToInterpolate(u8).
+ * Returns the pose (second) field.
+ *
+ * @param {Buffer} payload
+ * @returns {{x:number,y:number,theta:number}|null}
+ */
+function decodePredictionUpdatePose(payload) {
+    if (!Buffer.isBuffer(payload) || payload.length < 2) {
+        return null;
+    }
+    try {
+        const cursor = new BinaryCursor(payload);
+        skipRosHeader(cursor);
+        cursor.readBuffer(12); // predictPose x,y,theta
+        skipRosHeader(cursor);
+        if (cursor.remaining() < 13) {
+            return null;
+        }
+
+        return {
+            x: cursor.readFloatLE(),
+            y: cursor.readFloatLE(),
+            theta: cursor.readFloatLE()
+        };
+    } catch (e) {
+        return null;
+    }
+}
+
+/**
+ * Skip a ROS std_msgs/Header (seq u32, secs u32, nsecs u32, frame_id string).
+ *
+ * @param {BinaryCursor} cursor
+ */
+function skipRosHeader(cursor) {
+    cursor.readUInt32LE(); // seq
+    cursor.readUInt32LE(); // secs
+    cursor.readUInt32LE(); // nsecs
+    const frameLength = cursor.readUInt32LE();
+    cursor.readBuffer(frameLength);
+}
+
 module.exports = {
     TopicStateSubscriber: TopicStateSubscriber,
     ALERT_TYPE: ALERT_TYPE,
@@ -341,5 +384,6 @@ module.exports = {
     decodePowerChargeState: decodePowerChargeState,
     decodeTaskWorkState: decodeTaskWorkState,
     decodeWorkStatisticToWifi: decodeWorkStatisticToWifi,
-    decodeAlertAlerts: decodeAlertAlerts
+    decodeAlertAlerts: decodeAlertAlerts,
+    decodePredictionUpdatePose: decodePredictionUpdatePose
 };

@@ -3,7 +3,6 @@
 const BinaryCursor = require("../protocol/BinaryCursor");
 const Logger = require("../../../../Logger");
 const PersistentServiceClient = require("../core/PersistentServiceClient");
-const PredictionPoseSubscriber = require("../core/PredictionPoseSubscriber");
 const RosMasterXmlRpcClient = require("../core/RosMasterXmlRpcClient");
 const {
     TopicStateSubscriber,
@@ -11,7 +10,8 @@ const {
     decodePowerChargeState,
     decodeTaskWorkState,
     decodeWorkStatisticToWifi,
-    decodeAlertAlerts
+    decodeAlertAlerts,
+    decodePredictionUpdatePose
 } = require("../core/TopicStateSubscriber");
 const {labelNameFromId} = require("../../RoomLabels");
 
@@ -170,9 +170,13 @@ class EcovacsRosFacade {
         this.getLogInfoClient = makeClient("getLogInfo", {persistent: false});
         this.getLastLogInfoClient = makeClient("getLastLogInfo", {persistent: false});
 
-        this.poseSubscriber = new PredictionPoseSubscriber({
+        this.poseSubscriber = new TopicStateSubscriber({
             masterClient: this.masterClient,
             callerId: this.callerId,
+            topic: "/prediction/UpdatePose",
+            type: "prediction/UpdatePose",
+            md5: "fecf0dd688f5c70c9311410640ce79cd",
+            decoder: decodePredictionUpdatePose,
             connectTimeoutMs: options.connectTimeoutMs,
             readTimeoutMs: options.callTimeoutMs,
             onWarn: options.onWarn
@@ -492,14 +496,13 @@ class EcovacsRosFacade {
                 result: 1
             };
         }
-        const robotPose = this.poseSubscriber.getLatestPose(stalePoseMs);
+        const robotPose = this.poseSubscriber.getLatestValue(stalePoseMs);
 
         return {
             robot: {
-                topic: "topic:/prediction/*",
-                type: "prediction/Pose|UpdatePose|PredictPose",
+                topic: "/prediction/UpdatePose",
+                type: "prediction/UpdatePose",
                 pose: robotPose ?? {
-                    source: "topic:/prediction/*",
                     valid: 0,
                     error: "no fresh prediction pose available"
                 }
