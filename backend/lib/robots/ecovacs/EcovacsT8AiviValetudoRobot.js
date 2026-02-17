@@ -3,6 +3,7 @@ const EcovacsLifespanService = require("./ros/services/EcovacsLifespanService");
 const EcovacsMapService = require("./ros/services/EcovacsMapService");
 const EcovacsPositionService = require("./ros/services/EcovacsPositionService");
 const EcovacsQuirkFactory = require("./EcovacsQuirkFactory");
+const EcovacsRuntimeStateCache = require("./EcovacsRuntimeStateCache");
 const EcovacsRuntimeStateService = require("./ros/services/EcovacsRuntimeStateService");
 const EcovacsSettingService = require("./ros/services/EcovacsSettingService");
 const EcovacsSpotAreaService = require("./ros/services/EcovacsSpotAreaService");
@@ -13,41 +14,33 @@ const EcovacsWorkManageService = require("./ros/services/EcovacsWorkManageServic
 const entities = require("../../entities");
 const fs = require("fs");
 const Logger = require("../../Logger");
-const lzma = require("lzma-purejs");
 const mapEntities = require("../../entities/map");
 const MdsctlClient = require("./ros/services/MdsctlClient");
 const QuirksCapability = require("../../core/capabilities/QuirksCapability");
 const RosMasterXmlRpcClient = require("./ros/core/RosMasterXmlRpcClient");
 const ValetudoRobot = require("../../core/ValetudoRobot");
-const ValetudoRobotError = require("../../entities/core/ValetudoRobotError");
-const {ALERT_TYPE} = require("./ros/core/TopicStateSubscriber");
-require("./lzmaPurejsPkgIncludes");
+const {
+    REMOTE_MOVE_BACKWARD,
+    REMOTE_MOVE_FORWARD,
+    REMOTE_MOVE_MVA_CUSTOM,
+    REMOTE_MOVE_STOP,
+    REMOTE_TURN_W,
+    SOUND_BEEP,
+    SOUND_I_AM_HERE,
+    determineRobotStatus,
+    fanLevelToPresetValue,
+    statusToDockStatus,
+    waterLevelToPresetValue,
+} = require("./EcovacsStateMapping");
+const {alertTypeName, findMostSevereErrorAlert, mapAlertToRobotError} = require("./EcovacsAlertMapping");
+const {buildDetailedMapAlignedToSimplified, buildMapFromRooms, rebuildEntitiesOnlyMap} = require("./map/EcovacsMapBuilder");
+const {clampInt, mapCmToWorldMm, worldMmToMapPointCm} = require("./map/EcovacsMapTransforms");
+const {decodeCompressedMapResponse} = require("./map/EcovacsCompressedMapDecoder");
+const {decodeTraceRawHexToWorldMmPoints} = require("./map/EcovacsTraceDecoder");
+const {formatMapStats, getLayerPixelCountByType, getTotalLayerPixelCount, hasChargerEntity, hasRobotEntity} = require("./map/EcovacsMapStats");
 
 const stateAttrs = entities.state.attributes;
-const REMOTE_MOVE_MVA_CUSTOM = 9;
-const REMOTE_MOVE_FORWARD = 0;
-const REMOTE_MOVE_BACKWARD = 1;
-const REMOTE_MOVE_STOP = 2;
-const REMOTE_TURN_W = 87;
-const SOUND_I_AM_HERE = 30;
-const SOUND_BEEP = 17;
-const PIXEL_KEY_STRIDE = 65536;
 const DEFAULT_RUNTIME_STATE_CACHE_PATH = "/tmp/valetudo_ecovacs_runtime_state.json";
-const WORK_STATE = {
-    IDLE: 0,
-    RUNNING: 1,
-    PAUSED: 2
-};
-const WORK_TYPE = {
-    AUTO_CLEAN: 0,
-    AREA_CLEAN: 1,
-    CUSTOM_CLEAN: 2,
-    RETURN: 5,
-    GOTO: 6,
-    IDLE: 7,
-    REMOTE_CONTROL: 9,
-    AUTO_COLLECT_DIRT: 13
-};
 
 class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
     /**
@@ -74,8 +67,6 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.cleaningSettingsPollIntervalMs = implementationSpecificConfig.cleaningSettingsPollIntervalMs ?? 30_000;
         this.powerStateStaleAfterMs = implementationSpecificConfig.powerStateStaleAfterMs ?? 300_000;
         this.workStateStaleAfterMs = implementationSpecificConfig.workStateStaleAfterMs ?? 20_000;
-        this.runtimeStateCachePath = implementationSpecificConfig.runtimeStateCachePath ?? DEFAULT_RUNTIME_STATE_CACHE_PATH;
-        this.runtimeStateCacheWriteMinIntervalMs = implementationSpecificConfig.runtimeStateCacheWriteMinIntervalMs ?? 5000;
         this.tracePathEnabled = implementationSpecificConfig.tracePathEnabled ?? true;
         this.tracePointUnitMm = implementationSpecificConfig.tracePointUnitMm ?? 10;
         this.tracePathMaxPoints = implementationSpecificConfig.tracePathMaxPoints ?? 2000;
@@ -90,9 +81,10 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.livePositionPollInFlight = false;
         this.powerStatePollTimer = null;
         this.cleaningSettingsPollTimer = null;
-        this.runtimeStateCache = this.loadRuntimeStateCache();
-        this.lastRuntimeStateCacheWriteAt = 0;
-        this.runtimeStateCacheWriteTimer = null;
+        this.runtimeStateCache = new EcovacsRuntimeStateCache({
+            cachePath: implementationSpecificConfig.runtimeStateCachePath ?? DEFAULT_RUNTIME_STATE_CACHE_PATH,
+            writeMinIntervalMs: implementationSpecificConfig.runtimeStateCacheWriteMinIntervalMs ?? 5000
+        });
         this.livePositionRefreshCounter = 0;
         this.tracePathPointsMm = [];
         this.lastTraceEndIdx = -1;
@@ -132,7 +124,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.state.upsertFirstMatchingAttribute(new stateAttrs.DockStatusStateAttribute({
             value: stateAttrs.DockStatusStateAttribute.VALUE.IDLE
         }));
-        const cachedChargeState = this.runtimeStateCache?.chargeState;
+        const cachedChargeState = this.runtimeStateCache.data?.chargeState;
         const isCachedDocked = Boolean(
             cachedChargeState &&
             Number.isFinite(Number(cachedChargeState.isOnCharger)) &&
@@ -141,8 +133,8 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         const initialStatus = isCachedDocked ?
             stateAttrs.StatusStateAttribute.VALUE.DOCKED :
             stateAttrs.StatusStateAttribute.VALUE.IDLE;
-        const cachedBatteryLevel = Number(this.runtimeStateCache?.battery?.level);
-        const cachedBatteryFlag = this.runtimeStateCache?.battery?.flag;
+        const cachedBatteryLevel = Number(this.runtimeStateCache.data?.battery?.level);
+        const cachedBatteryFlag = this.runtimeStateCache.data?.battery?.flag;
         const batteryLevel = Number.isFinite(cachedBatteryLevel) ? clampInt(cachedBatteryLevel, 0, 100) : 0;
         const batteryFlag = Object.values(stateAttrs.BatteryStateAttribute.FLAG).includes(cachedBatteryFlag) ?
             cachedBatteryFlag :
@@ -164,7 +156,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             value: statusToDockStatus(initialStatus)
         }));
 
-        const cachedPose = this.runtimeStateCache?.robotPose;
+        const cachedPose = this.runtimeStateCache.data?.robotPose;
         if (cachedPose && Number.isFinite(cachedPose.x) && Number.isFinite(cachedPose.y)) {
             this.lastRobotPose = {
                 x: Number(cachedPose.x),
@@ -308,12 +300,16 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             this.updateRobotPoseFromPositions(positions);
             const robotPoseSnapshot = this.getCurrentRobotPoseOrNull();
 
-            const simplifiedMap = this.buildMapFromRooms(
+            const simplifiedMap = buildMapFromRooms(
                 roomDump.rooms,
                 positions,
                 robotPoseSnapshot,
                 undefined,
-                virtualWalls
+                virtualWalls,
+                {
+                    pixelSizeCm: this.mapPixelSizeCm,
+                    cachedRoomCleaningPreferences: this.cachedRoomCleaningPreferences,
+                }
             );
             const simplifiedWithDynamicEntities = rebuildEntitiesOnlyMap(
                 simplifiedMap,
@@ -357,12 +353,17 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                         `Ecovacs map poll: decoded compressed map (${compressedMap.width}x${compressedMap.height})`
                     );
                 }
-                const detailedMap = this.buildDetailedMapAlignedToSimplified(
+                const detailedMap = buildDetailedMapAlignedToSimplified(
                     roomDump.rooms,
                     positions,
                     robotPoseSnapshot,
                     compressedMap,
-                    virtualWalls
+                    virtualWalls,
+                    {
+                        rotationDegrees: this.detailedMapRotationDegrees,
+                        worldMmPerPixel: this.detailedMapWorldMmPerPixel,
+                        cachedRoomCleaningPreferences: this.cachedRoomCleaningPreferences,
+                    }
                 );
                 const detailedWithDynamicEntities = rebuildEntitiesOnlyMap(
                     detailedMap,
@@ -651,11 +652,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             clearInterval(this.cleaningSettingsPollTimer);
             this.cleaningSettingsPollTimer = null;
         }
-        if (this.runtimeStateCacheWriteTimer) {
-            clearTimeout(this.runtimeStateCacheWriteTimer);
-            this.runtimeStateCacheWriteTimer = null;
-        }
-        this.flushRuntimeStateCache();
+        this.runtimeStateCache.shutdown();
 
         await Promise.all([
             this.mapService.shutdown(),
@@ -669,367 +666,6 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             this.statisticsService.shutdown(),
             this.runtimeStateService.shutdown()
         ]);
-    }
-
-    /**
-     * @private
-     * @param {Array<any>} rooms
-     * @param {any} positions
-     * @param {{x:number,y:number,angle:number}|null} robotPose
-     * @param {object} [compressedMap]
-     * @param {Array<{vwid:number,type:number,dots:Array<[number,number]>}>} [virtualWalls]
-     * @returns {import("../../entities/map/ValetudoMap")}
-     */
-    buildMapFromRooms(rooms, positions, robotPose, compressedMap, virtualWalls) {
-        const pixelSizeCm = compressedMap?.resolutionCm ?? this.mapPixelSizeCm;
-        const parsedRooms = rooms.map(room => {
-            const polygon = Array.isArray(room.polygon) ? room.polygon : [];
-
-            const cached = this.cachedRoomCleaningPreferences[String(room.index)] ?? {};
-
-            return {
-                index: String(room.index ?? "0"),
-                labelName: room.label_name ?? `Room ${room.index ?? 0}`,
-                preference_times: room.preference_times ?? cached.times,
-                preference_water: room.preference_water ?? cached.water,
-                preference_suction: room.preference_suction ?? cached.suction,
-                preference_sequence: room.preference_sequence ?? cached.sequence ?? 0,
-                polygonCm: polygon.map(point => {
-                    return {
-                        x: Math.round(Number(point[0]) / 10),
-                        y: Math.round(Number(point[1]) / 10)
-                    };
-                })
-            };
-        }).filter(room => room.polygonCm.length >= 3);
-
-        let minX = Infinity;
-        let maxX = -Infinity;
-        let minY = Infinity;
-        let maxY = -Infinity;
-        for (const room of parsedRooms) {
-            for (const p of room.polygonCm) {
-                if (p.x < minX) {
-                    minX = p.x;
-                }
-                if (p.x > maxX) {
-                    maxX = p.x;
-                }
-                if (p.y < minY) {
-                    minY = p.y;
-                }
-                if (p.y > maxY) {
-                    maxY = p.y;
-                }
-            }
-        }
-        const marginCm = pixelSizeCm * 4;
-        const mapWidthPx = Math.ceil((maxX - minX + 2 * marginCm) / pixelSizeCm) + 1;
-        const mapHeightPx = Math.ceil((maxY - minY + 2 * marginCm) / pixelSizeCm) + 1;
-
-        const worldToGrid = (point) => {
-            const shiftedX = point.x - minX + marginCm;
-            const shiftedY = maxY - point.y + marginCm;
-
-            return {
-                x: Math.floor(shiftedX / pixelSizeCm),
-                y: Math.floor(shiftedY / pixelSizeCm)
-            };
-        };
-
-        const floorPixelSet = new Set();
-        const segmentLayers = [];
-        parsedRooms.forEach(room => {
-            const gridPolygon = room.polygonCm.map(worldToGrid);
-            const pixels = rasterizePolygon(gridPolygon);
-            if (pixels.length === 0) {
-                return;
-            }
-
-            pixels.forEach(pixel => {
-                floorPixelSet.add(pixel[0] * PIXEL_KEY_STRIDE + pixel[1]);
-            });
-
-            segmentLayers.push(new mapEntities.MapLayer({
-                type: mapEntities.MapLayer.TYPE.SEGMENT,
-                pixels: pixels.sort(mapEntities.MapLayer.COORDINATE_TUPLE_SORT).flat(),
-                metaData: buildSegmentMetaData(room.index, room.labelName, room, {})
-            }));
-        });
-
-        let rasterFloorPixels = unpackPixelKeys(floorPixelSet);
-        let rasterWallPixels = [];
-        if (compressedMap) {
-            try {
-                const projected = projectCompressedMapToGrid(compressedMap, mapWidthPx, mapHeightPx, floorPixelSet);
-                if (projected.floorPixels.length > 0) {
-                    rasterFloorPixels = projected.floorPixels;
-                }
-                rasterWallPixels = projected.wallPixels;
-            } catch (e) {
-                Logger.warn("Failed to project compressed Ecovacs raster into room grid", e);
-            }
-        }
-
-        const layers = [];
-        if (rasterFloorPixels.length > 0) {
-            layers.push(new mapEntities.MapLayer({
-                type: mapEntities.MapLayer.TYPE.FLOOR,
-                pixels: rasterFloorPixels.sort(mapEntities.MapLayer.COORDINATE_TUPLE_SORT).flat()
-            }));
-        }
-        if (rasterWallPixels.length > 0) {
-            layers.push(new mapEntities.MapLayer({
-                type: mapEntities.MapLayer.TYPE.WALL,
-                pixels: rasterWallPixels.sort(mapEntities.MapLayer.COORDINATE_TUPLE_SORT).flat()
-            }));
-        }
-        layers.push(...segmentLayers);
-
-        const mapItems = [];
-        const chargerPose = positions?.charger?.pose;
-        if (chargerPose && typeof chargerPose.x === "number" && typeof chargerPose.y === "number") {
-            const chargerGrid = worldToGrid({
-                x: Math.round(chargerPose.x / 10),
-                y: Math.round(chargerPose.y / 10)
-            });
-            mapItems.push(new mapEntities.PointMapEntity({
-                type: mapEntities.PointMapEntity.TYPE.CHARGER_LOCATION,
-                points: [
-                    chargerGrid.x * pixelSizeCm,
-                    chargerGrid.y * pixelSizeCm
-                ]
-            }));
-        }
-        if (robotPose) {
-            const robotGrid = worldToGrid({
-                x: Math.round(robotPose.x / 10),
-                y: Math.round(robotPose.y / 10)
-            });
-            mapItems.push(new mapEntities.PointMapEntity({
-                type: mapEntities.PointMapEntity.TYPE.ROBOT_POSITION,
-                points: [
-                    robotGrid.x * pixelSizeCm,
-                    robotGrid.y * pixelSizeCm
-                ],
-                metaData: {
-                    angle: Number.isFinite(robotPose.angle) ? robotPose.angle : 0
-                }
-            }));
-        }
-
-        const mapWidthCm = mapWidthPx * pixelSizeCm;
-        const mapHeightCm = mapHeightPx * pixelSizeCm;
-        const transform = {
-            type: "rooms",
-            marginCm: marginCm,
-            maxY: maxY,
-            minX: minX,
-            pixelSizeCm: pixelSizeCm
-        };
-        mapItems.push(...buildRestrictionEntities(transform, pixelSizeCm, virtualWalls));
-
-        return new mapEntities.ValetudoMap({
-            size: {
-                x: mapWidthCm,
-                y: mapHeightCm
-            },
-            pixelSize: pixelSizeCm,
-            layers: layers,
-            entities: mapItems,
-            metaData: {
-                ecovacsTransform: transform
-            }
-        });
-    }
-
-    /**
-     * Build detailed raster and overlays with the same transforms used by
-     * scripts/decode_map_dump.py + scripts/render_rooms_overlay.py.
-     *
-     * @param {Array<any>} rooms
-     * @param {any} positions
-     * @param {{x:number,y:number,angle:number}|null} robotPose
-     * @param {{width:number,height:number,resolutionCm:number,floorPixels:Array<[number,number]>,wallPixels:Array<[number,number]>}} compressedMap
-     * @param {Array<{vwid:number,type:number,dots:Array<[number,number]>}>} [virtualWalls]
-     * @returns {import("../../entities/map/ValetudoMap")}
-     */
-    buildDetailedMapAlignedToSimplified(rooms, positions, robotPose, compressedMap, virtualWalls) {
-        const pixelSizeCm = Number(compressedMap.resolutionCm);
-        if (!Number.isFinite(pixelSizeCm) || pixelSizeCm <= 0) {
-            throw new Error("Invalid compressed map pixel size");
-        }
-        const mapRotation = normalizeClockwiseRotation(this.detailedMapRotationDegrees);
-        const mmPerPixel = Number(this.detailedMapWorldMmPerPixel);
-        if (!Number.isFinite(mmPerPixel) || mmPerPixel <= 0) {
-            throw new Error("Invalid detailedMapWorldMmPerPixel");
-        }
-
-        const rotatedFloor = rotatePixelsClockwise(
-            compressedMap.floorPixels,
-            compressedMap.width,
-            compressedMap.height,
-            mapRotation
-        );
-        const rotatedWall = rotatePixelsClockwise(
-            compressedMap.wallPixels,
-            compressedMap.width,
-            compressedMap.height,
-            mapRotation
-        );
-        Logger.debug(
-            `Ecovacs detailed map transform: rotation=${mapRotation}deg size=${rotatedFloor.width}x${rotatedFloor.height} mm_per_pixel=${mmPerPixel}`
-        );
-
-        const mapWidthPx = rotatedFloor.width;
-        const mapHeightPx = rotatedFloor.height;
-        const layers = [];
-
-        if (rotatedFloor.pixels.length > 0) {
-            layers.push(new mapEntities.MapLayer({
-                type: mapEntities.MapLayer.TYPE.FLOOR,
-                pixels: rotatedFloor.pixels.sort(mapEntities.MapLayer.COORDINATE_TUPLE_SORT).flat()
-            }));
-        }
-        if (rotatedWall.pixels.length > 0) {
-            layers.push(new mapEntities.MapLayer({
-                type: mapEntities.MapLayer.TYPE.WALL,
-                pixels: rotatedWall.pixels.sort(mapEntities.MapLayer.COORDINATE_TUPLE_SORT).flat()
-            }));
-        }
-
-        for (const room of (Array.isArray(rooms) ? rooms : [])) {
-            const polygon = Array.isArray(room?.polygon) ? room.polygon : [];
-            const polygonGrid = polygon.map(point => {
-                return worldToGridScriptCompatible(
-                    Number(point?.[0]),
-                    Number(point?.[1]),
-                    mapWidthPx,
-                    mapHeightPx,
-                    mmPerPixel
-                );
-            }).filter(Boolean).map(point => {
-                return clampPointToBounds(point, mapWidthPx, mapHeightPx);
-            });
-            if (polygonGrid.length < 3) {
-                continue;
-            }
-            const pixels = rasterizePolygon(polygonGrid);
-            if (pixels.length === 0) {
-                continue;
-            }
-            const cachedPrefs = this.cachedRoomCleaningPreferences[String(room.index)] ?? {};
-            layers.push(new mapEntities.MapLayer({
-                type: mapEntities.MapLayer.TYPE.SEGMENT,
-                pixels: pixels.sort(mapEntities.MapLayer.COORDINATE_TUPLE_SORT).flat(),
-                metaData: buildSegmentMetaData(
-                    String(room.index ?? "0"),
-                    room.label_name ?? `Room ${room.index ?? 0}`,
-                    room,
-                    cachedPrefs
-                )
-            }));
-        }
-
-        const entities = [];
-        const chargerPose = positions?.charger?.pose;
-        if (chargerPose && typeof chargerPose.x === "number" && typeof chargerPose.y === "number") {
-            const chargerGrid = worldToGridScriptCompatible(
-                Number(chargerPose.x),
-                Number(chargerPose.y),
-                mapWidthPx,
-                mapHeightPx,
-                mmPerPixel
-            );
-            if (chargerGrid) {
-                entities.push(new mapEntities.PointMapEntity({
-                    type: mapEntities.PointMapEntity.TYPE.CHARGER_LOCATION,
-                    points: [
-                        chargerGrid.x * pixelSizeCm,
-                        chargerGrid.y * pixelSizeCm
-                    ]
-                }));
-            }
-        }
-        if (robotPose) {
-            const robotGrid = worldToGridScriptCompatible(
-                Number(robotPose.x),
-                Number(robotPose.y),
-                mapWidthPx,
-                mapHeightPx,
-                mmPerPixel
-            );
-            if (robotGrid) {
-                entities.push(new mapEntities.PointMapEntity({
-                    type: mapEntities.PointMapEntity.TYPE.ROBOT_POSITION,
-                    points: [
-                        robotGrid.x * pixelSizeCm,
-                        robotGrid.y * pixelSizeCm
-                    ],
-                    metaData: {
-                        angle: Number.isFinite(robotPose.angle) ? robotPose.angle : 0
-                    }
-                }));
-            }
-        }
-        const transform = {
-            mapHeightPx: mapHeightPx,
-            mapWidthPx: mapWidthPx,
-            mmPerPixel: mmPerPixel,
-            rotationDegrees: mapRotation,
-            type: "script",
-        };
-        entities.push(...buildRestrictionEntities(transform, pixelSizeCm, virtualWalls));
-
-        return new mapEntities.ValetudoMap({
-            size: {
-                x: mapWidthPx * pixelSizeCm,
-                y: mapHeightPx * pixelSizeCm
-            },
-            pixelSize: pixelSizeCm,
-            layers: layers,
-            entities: entities,
-            metaData: {
-                ecovacsTransform: transform
-            }
-        });
-    }
-
-    /**
-     * @private
-     * @param {any} positions
-     */
-    updateRobotPoseFromPositions(positions) {
-        const directPose = positions?.robot?.pose;
-        if (directPose && typeof directPose.x === "number" && typeof directPose.y === "number") {
-            this.lastRobotPose = {
-                x: directPose.x,
-                y: directPose.y,
-                angle: Number(directPose.theta ?? directPose.angle ?? 0)
-            };
-            this.updateRuntimeStateCache({
-                robotPose: this.lastRobotPose
-            });
-            return;
-        }
-    }
-
-    /**
-     * @private
-     * @returns {{x:number,y:number,angle:number}|null}
-     */
-    getCurrentRobotPoseOrNull() {
-        return this.lastRobotPose;
-    }
-
-    /**
-     * @returns {number}
-     */
-    getActiveMapId() {
-        if (!Number.isInteger(this.activeMapId)) {
-            throw new Error("Active map ID is not initialized. Wait for robot to be ready.");
-        }
-        return this.activeMapId >>> 0;
     }
 
     /**
@@ -1184,7 +820,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                     level: level,
                     flag: flag
                 }));
-                this.updateRuntimeStateCache({
+                this.runtimeStateCache.update({
                     battery: {
                         level: level,
                         flag: flag
@@ -1192,7 +828,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 });
             }
             if (chargeState && typeof chargeState.isOnCharger === "number" && typeof chargeState.chargeState === "number") {
-                this.updateRuntimeStateCache({
+                this.runtimeStateCache.update({
                     chargeState: {
                         isOnCharger: Number(chargeState.isOnCharger),
                         chargeState: Number(chargeState.chargeState)
@@ -1300,125 +936,40 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
     }
 
     /**
-     * @returns {{robotPose:{x:number,y:number,angle:number}|null,battery:{level:number,flag:string}|null,chargeState:{isOnCharger:number,chargeState:number}|null}}
+     * @private
+     * @param {any} positions
      */
-    loadRuntimeStateCache() {
-        try {
-            if (!fs.existsSync(this.runtimeStateCachePath)) {
-                return {
-                    robotPose: null,
-                    battery: null,
-                    chargeState: null
-                };
-            }
-            const parsed = JSON.parse(fs.readFileSync(this.runtimeStateCachePath, "utf8"));
-            const cachedChargeState = parsed?.chargeState;
-            const chargeState = (
-                cachedChargeState &&
-                Number.isFinite(Number(cachedChargeState.isOnCharger)) &&
-                Number.isFinite(Number(cachedChargeState.chargeState))
-            ) ? {
-                    isOnCharger: Number(cachedChargeState.isOnCharger),
-                    chargeState: Number(cachedChargeState.chargeState)
-                } : null;
-
-            return {
-                robotPose: parsed?.robotPose ?? null,
-                battery: parsed?.battery ?? null,
-                chargeState: chargeState
+    updateRobotPoseFromPositions(positions) {
+        const directPose = positions?.robot?.pose;
+        if (directPose && typeof directPose.x === "number" && typeof directPose.y === "number") {
+            this.lastRobotPose = {
+                x: directPose.x,
+                y: directPose.y,
+                angle: Number(directPose.theta ?? directPose.angle ?? 0)
             };
-        } catch (e) {
-            Logger.debug(`Failed to read Ecovacs runtime cache: ${e?.message ?? e}`);
-
-            return {
-                robotPose: null,
-                battery: null,
-                chargeState: null
-            };
+            this.runtimeStateCache.update({
+                robotPose: this.lastRobotPose
+            });
+            return;
         }
     }
 
     /**
-     * @param {{robotPose?:{x:number,y:number,angle:number},battery?:{level:number,flag:string},chargeState?:{isOnCharger:number,chargeState:number}}} patch
+     * @private
+     * @returns {{x:number,y:number,angle:number}|null}
      */
-    updateRuntimeStateCache(patch) {
-        let changed = false;
-        if (patch.robotPose) {
-            const pose = {
-                x: Number(patch.robotPose.x),
-                y: Number(patch.robotPose.y),
-                angle: Number(patch.robotPose.angle ?? 0)
-            };
-            if (
-                !this.runtimeStateCache.robotPose ||
-                this.runtimeStateCache.robotPose.x !== pose.x ||
-                this.runtimeStateCache.robotPose.y !== pose.y ||
-                this.runtimeStateCache.robotPose.angle !== pose.angle
-            ) {
-                this.runtimeStateCache.robotPose = pose;
-                changed = true;
-            }
-        }
-        if (patch.battery) {
-            const battery = {
-                level: clampInt(Number(patch.battery.level), 0, 100),
-                flag: String(patch.battery.flag)
-            };
-            if (
-                !this.runtimeStateCache.battery ||
-                this.runtimeStateCache.battery.level !== battery.level ||
-                this.runtimeStateCache.battery.flag !== battery.flag
-            ) {
-                this.runtimeStateCache.battery = battery;
-                changed = true;
-            }
-        }
-        if (patch.chargeState) {
-            const chargeState = {
-                isOnCharger: Number(patch.chargeState.isOnCharger),
-                chargeState: Number(patch.chargeState.chargeState)
-            };
-            if (
-                Number.isFinite(chargeState.isOnCharger) &&
-                Number.isFinite(chargeState.chargeState) &&
-                (
-                    !this.runtimeStateCache.chargeState ||
-                    this.runtimeStateCache.chargeState.isOnCharger !== chargeState.isOnCharger ||
-                    this.runtimeStateCache.chargeState.chargeState !== chargeState.chargeState
-                )
-            ) {
-                this.runtimeStateCache.chargeState = chargeState;
-                changed = true;
-            }
-        }
-        if (changed) {
-            this.scheduleRuntimeStateCacheWrite();
-        }
+    getCurrentRobotPoseOrNull() {
+        return this.lastRobotPose;
     }
 
-    scheduleRuntimeStateCacheWrite() {
-        if (this.runtimeStateCacheWriteTimer) {
-            return;
+    /**
+     * @returns {number}
+     */
+    getActiveMapId() {
+        if (!Number.isInteger(this.activeMapId)) {
+            throw new Error("Active map ID is not initialized. Wait for robot to be ready.");
         }
-        const elapsed = Date.now() - this.lastRuntimeStateCacheWriteAt;
-        const delayMs = Math.max(0, this.runtimeStateCacheWriteMinIntervalMs - elapsed);
-        this.runtimeStateCacheWriteTimer = setTimeout(() => {
-            this.runtimeStateCacheWriteTimer = null;
-            this.flushRuntimeStateCache();
-        }, delayMs);
-    }
-
-    flushRuntimeStateCache() {
-        try {
-            fs.writeFileSync(
-                this.runtimeStateCachePath,
-                JSON.stringify(this.runtimeStateCache),
-                "utf8"
-            );
-            this.lastRuntimeStateCacheWriteAt = Date.now();
-        } catch (e) {
-            Logger.debug(`Failed to write Ecovacs runtime cache: ${e?.message ?? e}`);
-        }
+        return this.activeMapId >>> 0;
     }
 
     /**
@@ -1478,67 +1029,6 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
 }
 
 /**
- * @param {Array<{x:number,y:number}>} polygon
- * @returns {Array<[number, number]>}
- */
-function rasterizePolygon(polygon) {
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minY = Infinity;
-    let maxY = -Infinity;
-    for (const p of polygon) {
-        if (p.x < minX) {
-            minX = p.x;
-        }
-        if (p.x > maxX) {
-            maxX = p.x;
-        }
-        if (p.y < minY) {
-            minY = p.y;
-        }
-        if (p.y > maxY) {
-            maxY = p.y;
-        }
-    }
-
-    /** @type {Array<[number, number]>} */
-    const pixels = [];
-    for (let y = minY; y <= maxY; y++) {
-        for (let x = minX; x <= maxX; x++) {
-            if (pointInPolygon(x + 0.5, y + 0.5, polygon)) {
-                pixels.push([x, y]);
-            }
-        }
-    }
-
-    return pixels;
-}
-
-/**
- * @param {number} x
- * @param {number} y
- * @param {Array<{x:number,y:number}>} polygon
- * @returns {boolean}
- */
-function pointInPolygon(x, y, polygon) {
-    let inside = false;
-    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-        const xi = polygon[i].x;
-        const yi = polygon[i].y;
-        const xj = polygon[j].x;
-        const yj = polygon[j].y;
-
-        const intersects = ((yi > y) !== (yj > y)) &&
-            (x < ((xj - xi) * (y - yi)) / (yj - yi) + xi);
-        if (intersects) {
-            inside = !inside;
-        }
-    }
-
-    return inside;
-}
-
-/**
  * @param {string} value
  * @returns {Array<number>}
  */
@@ -1587,1107 +1077,3 @@ function delay(ms) {
 }
 
 module.exports = EcovacsT8AiviValetudoRobot;
-
-/**
- * @param {{mapid:number,info:{mapWidth:number,mapHeight:number,columns:number,rows:number,submapWidth:number,submapHeight:number,resolution:number},submaps:Array<{data:Buffer}>}} response
- * @returns {{width:number,height:number,columns:number,rows:number,submapWidth:number,submapHeight:number,resolutionCm:number,floorPixels:Array<[number,number]>,wallPixels:Array<[number,number]>}}
- */
-function decodeCompressedMapResponse(response) {
-    const decodeStartedAt = Date.now();
-    const info = response.info;
-    const expectedSubmaps = info.columns * info.rows;
-    if (!Array.isArray(response.submaps) || response.submaps.length < expectedSubmaps) {
-        throw new Error(`Compressed map response incomplete: expected ${expectedSubmaps}, got ${response.submaps?.length ?? 0}`);
-    }
-
-    /** @type {Array<[number, number]>} */
-    const floorPixels = [];
-    /** @type {Array<[number, number]>} */
-    const wallPixels = [];
-
-    for (let tileIndex = 0; tileIndex < response.submaps.length; tileIndex++) {
-        const submap = response.submaps[tileIndex];
-        const decoded = decodeEcovacsCompressedSubmap(submap.data);
-        const expectedTileLen = info.submapWidth * info.submapHeight;
-        if (decoded.length !== expectedTileLen) {
-            throw new Error(`Tile length mismatch for submap ${tileIndex}: ${decoded.length} != ${expectedTileLen}`);
-        }
-
-        const tileRow = Math.floor(tileIndex / info.columns);
-        const tileCol = tileIndex % info.columns;
-        const baseX = tileCol * info.submapWidth;
-        const baseY = tileRow * info.submapHeight;
-
-        for (let y = 0; y < info.submapHeight; y++) {
-            const srcOffset = y * info.submapWidth;
-            for (let x = 0; x < info.submapWidth; x++) {
-                const value = decoded[srcOffset + x];
-                const mapX = baseX + x;
-                const mapY = baseY + y;
-                if (value === 1) {
-                    floorPixels.push([mapX, mapY]);
-                } else if (value === 2 || value === 255) {
-                    wallPixels.push([mapX, mapY]);
-                }
-            }
-        }
-    }
-
-    const result = {
-        width: info.mapWidth,
-        height: info.mapHeight,
-        columns: info.columns,
-        rows: info.rows,
-        submapWidth: info.submapWidth,
-        submapHeight: info.submapHeight,
-        resolutionCm: inferCompressedMapPixelSizeCm(info.resolution),
-        floorPixels: floorPixels,
-        wallPixels: wallPixels
-    };
-    Logger.debug(
-        `Ecovacs compressed map decode: ${response.submaps.length} submaps, floor=${floorPixels.length}, wall=${wallPixels.length}, took=${Date.now() - decodeStartedAt}ms`
-    );
-
-    return result;
-}
-
-/**
- * @param {Buffer} raw
- * @returns {Uint8Array}
- */
-function decodeEcovacsCompressedSubmap(raw) {
-    if (!Buffer.isBuffer(raw) || raw.length < 10) {
-        throw new Error("Compressed submap payload is too short");
-    }
-
-    const propsAndDict = raw.subarray(0, 5);
-    const uncompressedSize = raw.readUInt32LE(5);
-    const lzmaPayload = raw.subarray(9);
-
-    const lzmaAloneHeader = Buffer.alloc(13);
-    propsAndDict.copy(lzmaAloneHeader, 0, 0, 5);
-    lzmaAloneHeader.writeUInt32LE(uncompressedSize, 5);
-    lzmaAloneHeader.writeUInt32LE(0, 9);
-
-    const combined = Buffer.concat([lzmaAloneHeader, lzmaPayload]);
-    const decoded = lzma.decompressFile(combined);
-    const out = decoded instanceof Uint8Array ? decoded : Uint8Array.from(decoded);
-    if (out.length !== uncompressedSize) {
-        throw new Error(`Decoded submap length mismatch: ${out.length} != ${uncompressedSize}`);
-    }
-
-    return out;
-}
-
-/**
- * Ecovacs `resolution` is observed as 50 for 5cm maps.
- * Treat values >= 20 as millimeters, otherwise centimeters.
- *
- * @param {number} raw
- * @returns {number}
- */
-function inferCompressedMapPixelSizeCm(raw) {
-    const v = Number(raw);
-    if (!Number.isFinite(v) || v <= 0) {
-        return 5;
-    }
-    if (v >= 20) {
-        return Math.max(1, Math.round(v / 10));
-    }
-
-    return Math.max(1, Math.round(v));
-}
-
-/**
- * @param {{width:number,height:number,floorPixels:Array<[number,number]>,wallPixels:Array<[number,number]>}} compressedMap
- * @param {number} targetWidth
- * @param {number} targetHeight
- * @param {Set<number>} roomFloorSet  packed pixel keys (x * PIXEL_KEY_STRIDE + y)
- * @returns {{floorPixels:Array<[number,number]>,wallPixels:Array<[number,number]>}}
- */
-function projectCompressedMapToGrid(compressedMap, targetWidth, targetHeight, roomFloorSet) {
-    const projectionStartedAt = Date.now();
-    const orientation = chooseBestProjectionOrientation(compressedMap, targetWidth, targetHeight, roomFloorSet);
-    const floorSet = new Set();
-    const wallSet = new Set();
-
-    for (const [sx, sy] of compressedMap.floorPixels) {
-        const p = projectSourcePointToTarget(sx, sy, compressedMap.width, compressedMap.height, targetWidth, targetHeight, orientation);
-        if (p) {
-            floorSet.add(p[0] * PIXEL_KEY_STRIDE + p[1]);
-        }
-    }
-    for (const [sx, sy] of compressedMap.wallPixels) {
-        const p = projectSourcePointToTarget(sx, sy, compressedMap.width, compressedMap.height, targetWidth, targetHeight, orientation);
-        if (p) {
-            wallSet.add(p[0] * PIXEL_KEY_STRIDE + p[1]);
-        }
-    }
-
-    const floorPixels = unpackPixelKeys(floorSet);
-    const wallPixels = unpackPixelKeys(wallSet);
-    Logger.debug(
-        `Ecovacs compressed map projection: orientation=${orientation}, floor=${floorPixels.length}, wall=${wallPixels.length}, took=${Date.now() - projectionStartedAt}ms`
-    );
-
-    return {
-        floorPixels: floorPixels,
-        wallPixels: wallPixels
-    };
-}
-
-/**
- * @param {{width:number,height:number,floorPixels:Array<[number,number]>}} compressedMap
- * @param {number} targetWidth
- * @param {number} targetHeight
- * @param {Set<number>} roomFloorSet  packed pixel keys (x * PIXEL_KEY_STRIDE + y)
- * @returns {number}
- */
-function chooseBestProjectionOrientation(compressedMap, targetWidth, targetHeight, roomFloorSet) {
-    const maxSample = 4000;
-    const step = Math.max(1, Math.floor(compressedMap.floorPixels.length / maxSample));
-
-    let bestOrientation = 0;
-    let bestScore = -1;
-    for (let orientation = 0; orientation < 8; orientation++) {
-        let score = 0;
-        let checked = 0;
-        for (let i = 0; i < compressedMap.floorPixels.length; i += step) {
-            const [sx, sy] = compressedMap.floorPixels[i];
-            const p = projectSourcePointToTarget(
-                sx,
-                sy,
-                compressedMap.width,
-                compressedMap.height,
-                targetWidth,
-                targetHeight,
-                orientation
-            );
-            if (!p) {
-                continue;
-            }
-            checked++;
-            if (roomFloorSet.has(p[0] * PIXEL_KEY_STRIDE + p[1])) {
-                score++;
-            }
-        }
-        const normalized = checked > 0 ? (score / checked) : 0;
-        if (normalized > bestScore) {
-            bestScore = normalized;
-            bestOrientation = orientation;
-        }
-    }
-
-    return bestOrientation;
-}
-
-/**
- * @param {number} sx
- * @param {number} sy
- * @param {number} srcWidth
- * @param {number} srcHeight
- * @param {number} targetWidth
- * @param {number} targetHeight
- * @param {number} orientation
- * @returns {[number, number]|null}
- */
-function projectSourcePointToTarget(sx, sy, srcWidth, srcHeight, targetWidth, targetHeight, orientation) {
-    const transformed = orientPoint(sx, sy, srcWidth, srcHeight, orientation);
-    if (!transformed) {
-        return null;
-    }
-    const [ox, oy, ow, oh] = transformed;
-    if (ow <= 1 || oh <= 1 || targetWidth <= 1 || targetHeight <= 1) {
-        return null;
-    }
-
-    const tx = Math.round((ox / (ow - 1)) * (targetWidth - 1));
-    const ty = Math.round((oy / (oh - 1)) * (targetHeight - 1));
-    if (tx < 0 || ty < 0 || tx >= targetWidth || ty >= targetHeight) {
-        return null;
-    }
-
-    return [tx, ty];
-}
-
-/**
- * @param {number} x
- * @param {number} y
- * @param {number} width
- * @param {number} height
- * @param {number} orientation
- * @returns {[number, number, number, number]|null}
- */
-function orientPoint(x, y, width, height, orientation) {
-    switch (orientation) {
-        case 0:
-            return [x, y, width, height];
-        case 1:
-            return [width - 1 - x, y, width, height];
-        case 2:
-            return [x, height - 1 - y, width, height];
-        case 3:
-            return [width - 1 - x, height - 1 - y, width, height];
-        case 4:
-            return [y, x, height, width];
-        case 5:
-            return [height - 1 - y, x, height, width];
-        case 6:
-            return [y, width - 1 - x, height, width];
-        case 7:
-            return [height - 1 - y, width - 1 - x, height, width];
-        default:
-            return null;
-    }
-}
-
-/**
- * Unpack a Set of numeric pixel keys (x * PIXEL_KEY_STRIDE + y) into an array of [x, y] tuples.
- *
- * @param {Set<number>} set
- * @returns {Array<[number, number]>}
- */
-function unpackPixelKeys(set) {
-    const result = [];
-    for (const key of set) {
-        result.push([(key / PIXEL_KEY_STRIDE) | 0, key % PIXEL_KEY_STRIDE]);
-    }
-
-    return result;
-}
-
-/**
- * @param {number} rotation
- * @returns {number}
- */
-function normalizeClockwiseRotation(rotation) {
-    const raw = Number(rotation);
-    if (!Number.isFinite(raw)) {
-        return 270;
-    }
-    const normalized = ((Math.round(raw) % 360) + 360) % 360;
-    if (normalized === 0 || normalized === 90 || normalized === 180 || normalized === 270) {
-        return normalized;
-    }
-
-    return 270;
-}
-
-/**
- * Rotate pixel tuples by 0/90/180/270 degrees clockwise.
- *
- * @param {Array<[number,number]>} pixels
- * @param {number} width
- * @param {number} height
- * @param {number} rotation
- * @returns {{pixels:Array<[number,number]>,width:number,height:number}}
- */
-function rotatePixelsClockwise(pixels, width, height, rotation) {
-    const inPixels = Array.isArray(pixels) ? pixels : [];
-    const out = [];
-    if (rotation === 0) {
-        for (const [x, y] of inPixels) {
-            out.push([x, y]);
-        }
-
-        return {pixels: out, width: width, height: height};
-    }
-    if (rotation === 180) {
-        for (const [x, y] of inPixels) {
-            out.push([width - 1 - x, height - 1 - y]);
-        }
-
-        return {pixels: out, width: width, height: height};
-    }
-    if (rotation === 90) {
-        for (const [x, y] of inPixels) {
-            out.push([height - 1 - y, x]);
-        }
-
-        return {pixels: out, width: height, height: width};
-    }
-    if (rotation === 270) {
-        for (const [x, y] of inPixels) {
-            out.push([y, width - 1 - x]);
-        }
-
-        return {pixels: out, width: height, height: width};
-    }
-
-    return {pixels: out, width: width, height: height};
-}
-
-/**
- * Same center-based transform as scripts/render_rooms_overlay.py.
- *
- * @param {number} worldXmm
- * @param {number} worldYmm
- * @param {number} mapWidthPx
- * @param {number} mapHeightPx
- * @param {number} mmPerPixel
- * @returns {{x:number,y:number}|null}
- */
-function worldToGridScriptCompatible(worldXmm, worldYmm, mapWidthPx, mapHeightPx, mmPerPixel) {
-    if (!Number.isFinite(worldXmm) || !Number.isFinite(worldYmm)) {
-        return null;
-    }
-    const cx = mapWidthPx / 2.0;
-    const cy = mapHeightPx / 2.0;
-
-    return {
-        x: Math.round(cx + (worldXmm / mmPerPixel)),
-        y: Math.round(cy - (worldYmm / mmPerPixel))
-    };
-}
-
-/**
- * @param {{x:number,y:number}} point
- * @param {number} width
- * @param {number} height
- * @returns {{x:number,y:number}}
- */
-function clampPointToBounds(point, width, height) {
-    return {
-        x: Math.max(0, Math.min(width - 1, Math.round(point.x))),
-        y: Math.max(0, Math.min(height - 1, Math.round(point.y)))
-    };
-}
-
-/**
- * @param {import("../../entities/map/ValetudoMap")} map
- * @returns {number}
- */
-function getTotalLayerPixelCount(map) {
-    const layers = Array.isArray(map?.layers) ? map.layers : [];
-
-    return layers.reduce((sum, layer) => {
-        const px = Number(layer?.dimensions?.pixelCount ?? 0);
-
-        return sum + (Number.isFinite(px) ? px : 0);
-    }, 0);
-}
-
-/**
- * @param {import("../../entities/map/ValetudoMap")} map
- * @returns {string}
- */
-function formatMapStats(map) {
-    const widthCm = Number(map?.size?.x ?? 0);
-    const heightCm = Number(map?.size?.y ?? 0);
-    const pixelSize = Number(map?.pixelSize ?? 0);
-    const layers = Array.isArray(map?.layers) ? map.layers : [];
-    const entitiesCount = Array.isArray(map?.entities) ? map.entities.length : 0;
-    const totalPixels = getTotalLayerPixelCount(map);
-    const layerSummary = layers.map(layer => {
-        const px = Number(layer?.dimensions?.pixelCount ?? 0);
-        const cpx = Array.isArray(layer?.compressedPixels) ? layer.compressedPixels.length : 0;
-
-        return `${layer.type}:${Number.isFinite(px) ? px : 0}(rle=${cpx})`;
-    }).join(",");
-    const payloadBytes = estimateMapPayloadBytes(map);
-
-    return `size_cm=${widthCm}x${heightCm} pixel_cm=${pixelSize} layers=${layers.length} entities=${entitiesCount} layer_pixels=${totalPixels} payload_bytes=${payloadBytes} [${layerSummary}]`;
-}
-
-/**
- * @param {import("../../entities/map/ValetudoMap")} map
- * @returns {boolean}
- */
-function hasRobotEntity(map) {
-    return Array.isArray(map?.entities) && map.entities.some(entity => entity?.type === mapEntities.PointMapEntity.TYPE.ROBOT_POSITION);
-}
-
-/**
- * @param {import("../../entities/map/ValetudoMap")} map
- * @returns {boolean}
- */
-function hasChargerEntity(map) {
-    return Array.isArray(map?.entities) && map.entities.some(entity => entity?.type === mapEntities.PointMapEntity.TYPE.CHARGER_LOCATION);
-}
-
-/**
- * Decode one ManipulateTrace raw hex chunk:
- * [5B props+dict][4B usize32 LE][LZMA stream], uncompressed records: <int16 x><int16 y><u8 flag>
- *
- * @param {string} rawHex
- * @param {number} unitMm
- * @returns {Array<{x:number,y:number,flag:number}>}
- */
-function decodeTraceRawHexToWorldMmPoints(rawHex, unitMm) {
-    const raw = Buffer.from(String(rawHex ?? ""), "hex");
-    if (raw.length < 10) {
-        return [];
-    }
-
-    const scale = Number(unitMm);
-    if (!Number.isFinite(scale) || scale <= 0) {
-        return [];
-    }
-
-    /** @type {Array<{x:number,y:number,flag:number}>} */
-    const points = [];
-    const decodedPrimary = tryDecodeSingleTraceChunk(raw);
-    if (decodedPrimary !== null) {
-        appendDecodedTracePoints(points, decodedPrimary, scale);
-        return points;
-    }
-
-    // Fallback for concatenated tail payloads: split by observed chunk signature.
-    const signature = Buffer.from([0x5d, 0x00, 0x00, 0x04, 0x00]);
-    const starts = [];
-    for (let i = 0; i <= raw.length - signature.length; i++) {
-        let match = true;
-        for (let j = 0; j < signature.length; j++) {
-            if (raw[i + j] !== signature[j]) {
-                match = false;
-                break;
-            }
-        }
-        if (match) {
-            starts.push(i);
-        }
-    }
-    if (starts.length === 0) {
-        return [];
-    }
-    starts.push(raw.length);
-    for (let i = 0; i + 1 < starts.length; i++) {
-        const chunk = raw.subarray(starts[i], starts[i + 1]);
-        const decoded = tryDecodeSingleTraceChunk(chunk);
-        if (decoded !== null) {
-            appendDecodedTracePoints(points, decoded, scale);
-        }
-    }
-
-    return points;
-}
-
-/**
- * @param {Array<{x:number,y:number,flag:number}>} outPoints
- * @param {Buffer} decoded
- * @param {number} scale
- */
-function appendDecodedTracePoints(outPoints, decoded, scale) {
-    for (let off = 0; off + 4 < decoded.length; off += 5) {
-        const x = decoded.readInt16LE(off);
-        const y = decoded.readInt16LE(off + 2);
-        const flag = decoded.readUInt8(off + 4);
-        outPoints.push({
-            x: x * scale,
-            y: y * scale,
-            flag: flag
-        });
-    }
-}
-
-/**
- * @param {Buffer} raw
- * @returns {Buffer|null}
- */
-function tryDecodeSingleTraceChunk(raw) {
-    if (!Buffer.isBuffer(raw) || raw.length < 10) {
-        return null;
-    }
-    try {
-        const propsDict = raw.subarray(0, 5);
-        const usize32 = raw.readUInt32LE(5);
-        const lzmaPayload = raw.subarray(9);
-        const hdr = Buffer.alloc(13);
-        propsDict.copy(hdr, 0, 0, 5);
-        hdr.writeUInt32LE(usize32, 5);
-        hdr.writeUInt32LE(0, 9);
-        const outRaw = lzma.decompressFile(Buffer.concat([hdr, lzmaPayload]));
-        const out = outRaw instanceof Uint8Array ? Buffer.from(outRaw) : Buffer.from(outRaw ?? []);
-        if (out.length < 5) {
-            return null;
-        }
-
-        return out;
-    } catch (e) {
-        return null;
-    }
-}
-
-/**
- * @param {import("../../entities/map/ValetudoMap")} currentMap
- * @param {any} positions
- * @param {{x:number,y:number,angle:number}|null} robotPose
- * @param {Array<{x:number,y:number}>} [tracePathPointsMm]
- * @returns {import("../../entities/map/ValetudoMap")|null}
- */
-function rebuildEntitiesOnlyMap(currentMap, positions, robotPose, tracePathPointsMm) {
-    const transform = currentMap?.metaData?.ecovacsTransform;
-    if (!transform) {
-        return null;
-    }
-    const pixelSizeCm = Number(currentMap?.pixelSize ?? 0);
-    if (!Number.isFinite(pixelSizeCm) || pixelSizeCm <= 0) {
-        return null;
-    }
-
-    const staticEntities = Array.isArray(currentMap.entities) ? currentMap.entities.filter(entity => {
-        return entity?.type !== mapEntities.PointMapEntity.TYPE.CHARGER_LOCATION &&
-            entity?.type !== mapEntities.PointMapEntity.TYPE.ROBOT_POSITION &&
-            entity?.type !== mapEntities.PathMapEntity.TYPE.PATH;
-    }) : [];
-    const dynamicEntities = [];
-
-    const chargerPose = positions?.charger?.pose;
-    const chargerPoint = chargerPose ? worldMmToMapPointCm(transform, Number(chargerPose.x), Number(chargerPose.y), pixelSizeCm) : null;
-    if (chargerPoint) {
-        dynamicEntities.push(new mapEntities.PointMapEntity({
-            type: mapEntities.PointMapEntity.TYPE.CHARGER_LOCATION,
-            points: chargerPoint
-        }));
-    }
-
-    if (robotPose) {
-        const robotPoint = worldMmToMapPointCm(transform, Number(robotPose.x), Number(robotPose.y), pixelSizeCm);
-        if (robotPoint) {
-            dynamicEntities.push(new mapEntities.PointMapEntity({
-                type: mapEntities.PointMapEntity.TYPE.ROBOT_POSITION,
-                points: robotPoint,
-                metaData: {
-                    angle: Number.isFinite(robotPose.angle) ? robotPose.angle : 0
-                }
-            }));
-        }
-    }
-
-    const pathPointsCm = [];
-    for (const point of (Array.isArray(tracePathPointsMm) ? tracePathPointsMm : [])) {
-        const mapped = worldMmToMapPointCm(transform, Number(point.x), Number(point.y), pixelSizeCm);
-        if (!mapped) {
-            continue;
-        }
-        pathPointsCm.push(mapped[0], mapped[1]);
-    }
-    if (pathPointsCm.length >= 4) {
-        dynamicEntities.push(new mapEntities.PathMapEntity({
-            type: mapEntities.PathMapEntity.TYPE.PATH,
-            points: pathPointsCm
-        }));
-    }
-
-    if (dynamicEntities.length === 0) {
-        return null;
-    }
-    if (areDynamicEntitiesUnchanged(currentMap.entities, dynamicEntities)) {
-        return null;
-    }
-
-    return new mapEntities.ValetudoMap({
-        size: currentMap.size,
-        pixelSize: currentMap.pixelSize,
-        layers: currentMap.layers,
-        entities: staticEntities.concat(dynamicEntities),
-        metaData: currentMap.metaData
-    });
-}
-
-/**
- * @param {any} transform
- * @param {number} worldXmm
- * @param {number} worldYmm
- * @param {number} pixelSizeCm
- * @returns {Array<number>|null}
- */
-function worldMmToMapPointCm(transform, worldXmm, worldYmm, pixelSizeCm) {
-    if (!Number.isFinite(worldXmm) || !Number.isFinite(worldYmm)) {
-        return null;
-    }
-
-    if (transform.type === "rooms") {
-        const minX = Number(transform.minX);
-        const maxY = Number(transform.maxY);
-        const marginCm = Number(transform.marginCm);
-        if (!Number.isFinite(minX) || !Number.isFinite(maxY) || !Number.isFinite(marginCm)) {
-            return null;
-        }
-        const xCm = Math.round(worldXmm / 10);
-        const yCm = Math.round(worldYmm / 10);
-        const shiftedX = xCm - minX + marginCm;
-        const shiftedY = maxY - yCm + marginCm;
-        const gridX = Math.floor(shiftedX / pixelSizeCm);
-        const gridY = Math.floor(shiftedY / pixelSizeCm);
-
-        return [gridX * pixelSizeCm, gridY * pixelSizeCm];
-    }
-
-    if (transform.type === "script") {
-        const mapWidthPx = Number(transform.mapWidthPx);
-        const mapHeightPx = Number(transform.mapHeightPx);
-        const mmPerPixel = Number(transform.mmPerPixel);
-        if (!Number.isFinite(mapWidthPx) || !Number.isFinite(mapHeightPx) || !Number.isFinite(mmPerPixel) || mmPerPixel <= 0) {
-            return null;
-        }
-        const cx = mapWidthPx / 2.0;
-        const cy = mapHeightPx / 2.0;
-        const x = clampInt(Math.round(cx + (worldXmm / mmPerPixel)), 0, mapWidthPx - 1);
-        const y = clampInt(Math.round(cy - (worldYmm / mmPerPixel)), 0, mapHeightPx - 1);
-
-        return [x * pixelSizeCm, y * pixelSizeCm];
-    }
-
-    return null;
-}
-
-/**
- * @param {any} transform
- * @param {number} mapXcm
- * @param {number} mapYcm
- * @param {number} pixelSizeCm
- * @returns {{x:number,y:number}|null}
- */
-function mapCmToWorldMm(transform, mapXcm, mapYcm, pixelSizeCm) {
-    if (!Number.isFinite(mapXcm) || !Number.isFinite(mapYcm) || !Number.isFinite(pixelSizeCm) || pixelSizeCm <= 0) {
-        return null;
-    }
-
-    if (transform.type === "rooms") {
-        const minX = Number(transform.minX);
-        const maxY = Number(transform.maxY);
-        const marginCm = Number(transform.marginCm);
-        if (!Number.isFinite(minX) || !Number.isFinite(maxY) || !Number.isFinite(marginCm)) {
-            return null;
-        }
-        const gridX = Math.round(mapXcm / pixelSizeCm);
-        const gridY = Math.round(mapYcm / pixelSizeCm);
-        const xCm = gridX * pixelSizeCm + minX - marginCm;
-        const yCm = maxY + marginCm - (gridY * pixelSizeCm);
-
-        return {
-            x: Math.round(xCm * 10),
-            y: Math.round(yCm * 10)
-        };
-    }
-
-    if (transform.type === "script") {
-        const mapWidthPx = Number(transform.mapWidthPx);
-        const mapHeightPx = Number(transform.mapHeightPx);
-        const mmPerPixel = Number(transform.mmPerPixel);
-        if (!Number.isFinite(mapWidthPx) || !Number.isFinite(mapHeightPx) || !Number.isFinite(mmPerPixel) || mmPerPixel <= 0) {
-            return null;
-        }
-        const cx = mapWidthPx / 2.0;
-        const cy = mapHeightPx / 2.0;
-        const xPx = mapXcm / pixelSizeCm;
-        const yPx = mapYcm / pixelSizeCm;
-
-        return {
-            x: Math.round((xPx - cx) * mmPerPixel),
-            y: Math.round((cy - yPx) * mmPerPixel)
-        };
-    }
-
-    return null;
-}
-
-/**
- * Build segment layer metadata for a room, with cache fallback.
- *
- * @param {string} segmentId
- * @param {string} name
- * @param {{preference_times?:number, preference_water?:number, preference_suction?:number, preference_sequence?:number}} room
- * @param {{times?:number, water?:number, suction?:number, sequence?:number}} cachedPrefs
- * @returns {{segmentId:string, name:string, roomCleaningPreferences:{times:number, water:number, suction:number}, roomCleaningSequence:number}}
- */
-function buildSegmentMetaData(segmentId, name, room, cachedPrefs) {
-    return {
-        segmentId: segmentId,
-        name: name,
-        roomCleaningPreferences: {
-            times: room.preference_times ?? cachedPrefs.times,
-            water: room.preference_water ?? cachedPrefs.water,
-            suction: room.preference_suction ?? cachedPrefs.suction
-        },
-        roomCleaningSequence: room.preference_sequence ?? cachedPrefs.sequence ?? 0
-    };
-}
-
-/**
- * @param {any} transform
- * @param {number} pixelSizeCm
- * @param {Array<{vwid:number,type:number,dots:Array<[number,number]>}>} [virtualWalls]
- * @returns {Array<any>}
- */
-function buildRestrictionEntities(transform, pixelSizeCm, virtualWalls) {
-    /** @type {Array<any>} */
-    const entitiesOut = [];
-    for (const wall of (Array.isArray(virtualWalls) ? virtualWalls : [])) {
-        const pointsCm = (Array.isArray(wall.dots) ? wall.dots : []).map(dot => {
-            return worldMmToMapPointCm(transform, Number(dot?.[0]), Number(dot?.[1]), pixelSizeCm);
-        }).filter(Boolean);
-        if (pointsCm.length < 2) {
-            continue;
-        }
-        const flattened = pointsCm.flat();
-        if (pointsCm.length >= 3) {
-            const xs = pointsCm.map(point => point[0]);
-            const ys = pointsCm.map(point => point[1]);
-            const minX = Math.min(...xs);
-            const maxX = Math.max(...xs);
-            const minY = Math.min(...ys);
-            const maxY = Math.max(...ys);
-            if (!Number.isFinite(minX) || !Number.isFinite(maxX) || !Number.isFinite(minY) || !Number.isFinite(maxY)) {
-                continue;
-            }
-            const normalizedRect = [
-                minX, minY,
-                maxX, minY,
-                maxX, maxY,
-                minX, maxY
-            ];
-            entitiesOut.push(new mapEntities.PolygonMapEntity({
-                type: wall.type === 1 ?
-                    mapEntities.PolygonMapEntity.TYPE.NO_MOP_AREA :
-                    mapEntities.PolygonMapEntity.TYPE.NO_GO_AREA,
-                points: normalizedRect
-            }));
-        } else {
-            entitiesOut.push(new mapEntities.LineMapEntity({
-                type: mapEntities.LineMapEntity.TYPE.VIRTUAL_WALL,
-                points: flattened
-            }));
-        }
-    }
-
-    return entitiesOut;
-}
-
-/**
- * @param {number} value
- * @param {number} min
- * @param {number} max
- * @returns {number}
- */
-function clampInt(value, min, max) {
-    if (!Number.isFinite(value)) {
-        return min;
-    }
-
-    return Math.max(min, Math.min(max, Math.round(value)));
-}
-
-/**
- * @param {{worktype:number,state:number,workcause:number}|null|undefined} workState
- * @param {{isOnCharger:number,chargeState:number}|null|undefined} chargeState
- * @returns {string}
- */
-function determineRobotStatus(workState, chargeState) {
-    const onCharger = Number(chargeState?.isOnCharger) > 0;
-    if (onCharger) {
-        return stateAttrs.StatusStateAttribute.VALUE.DOCKED;
-    }
-
-    if (workState) {
-        if (workState.state === WORK_STATE.PAUSED) {
-            return stateAttrs.StatusStateAttribute.VALUE.PAUSED;
-        }
-        if (workState.state === WORK_STATE.RUNNING) {
-            if (workState.worktype === WORK_TYPE.RETURN) {
-                return stateAttrs.StatusStateAttribute.VALUE.RETURNING;
-            }
-            if (workState.worktype === WORK_TYPE.REMOTE_CONTROL) {
-                return stateAttrs.StatusStateAttribute.VALUE.MANUAL_CONTROL;
-            }
-            if (workState.worktype === WORK_TYPE.GOTO) {
-                return stateAttrs.StatusStateAttribute.VALUE.MOVING;
-            }
-
-            return stateAttrs.StatusStateAttribute.VALUE.CLEANING;
-        }
-    }
-
-    return stateAttrs.StatusStateAttribute.VALUE.IDLE;
-}
-
-/**
- * @param {string} statusValue
- * @returns {string}
- */
-function statusToDockStatus(statusValue) {
-    if (statusValue === stateAttrs.StatusStateAttribute.VALUE.CLEANING) {
-        return stateAttrs.DockStatusStateAttribute.VALUE.CLEANING;
-    }
-    if (statusValue === stateAttrs.StatusStateAttribute.VALUE.PAUSED) {
-        return stateAttrs.DockStatusStateAttribute.VALUE.PAUSE;
-    }
-
-    return stateAttrs.DockStatusStateAttribute.VALUE.IDLE;
-}
-
-/**
- * Alert types classified as errors (vs. warnings).
- * Only these will cause the robot state to transition to ERROR.
- * @type {Set<number>}
- */
-const ERROR_ALERT_TYPES = new Set([
-    ALERT_TYPE.FALL_ERROR,
-    ALERT_TYPE.BRUSH_CURRENT_STATE_ERROR,
-    ALERT_TYPE.SIDE_BRUSH_CURRENT_ERROR,
-    ALERT_TYPE.LEFT_WHEEL_CURRENT_ERROR,
-    ALERT_TYPE.RIGHT_WHEEL_CURRENT_ERROR,
-    ALERT_TYPE.DOWNIN_ERROR,
-    ALERT_TYPE.BUMP_LONG_TIMER_TRIGE_ERROR,
-    ALERT_TYPE.BUMP_LONG_TIMER_NO_TRIGE_ERROR,
-    ALERT_TYPE.DEGREE_NO_CHANGE_ERROR,
-    ALERT_TYPE.LEFT_WHEEL_SPEED_ERROR,
-    ALERT_TYPE.RIGHT_WHEEL_SPEED_ERROR,
-    ALERT_TYPE.FAN_SPEED_ERROR,
-    ALERT_TYPE.ROBOT_STUCK_ERROR,
-    ALERT_TYPE.LDS_ERROR,
-    ALERT_TYPE.ULTRA_WATERBOX_ERROR,
-]);
-
-/**
- * Human-readable names for alert types.
- * @type {Object<number, string>}
- */
-const ALERT_TYPE_NAMES = {
-    [ALERT_TYPE.DIRT_BOX_STATE]: "Dustbin issue",
-    [ALERT_TYPE.WATER_BOX_STATE]: "Water tank issue",
-    [ALERT_TYPE.FALL_ERROR]: "Cliff sensor error",
-    [ALERT_TYPE.BRUSH_CURRENT_STATE_ERROR]: "Main brush overcurrent",
-    [ALERT_TYPE.SIDE_BRUSH_CURRENT_ERROR]: "Side brush overcurrent",
-    [ALERT_TYPE.LEFT_WHEEL_CURRENT_ERROR]: "Left wheel overcurrent",
-    [ALERT_TYPE.RIGHT_WHEEL_CURRENT_ERROR]: "Right wheel overcurrent",
-    [ALERT_TYPE.DOWNIN_ERROR]: "Drop sensor error",
-    [ALERT_TYPE.BRUSH_CURRENT_LARGE_CURRENT_WARNING]: "Main brush high current",
-    [ALERT_TYPE.SIDE_BRUSH_CURRENT_LARGE_CURRENT_WARNING]: "Side brush high current",
-    [ALERT_TYPE.LEFT_SIDE_BRUSH_CURRENT_LARGE_CURRENT_WARNING]: "Left side brush high current",
-    [ALERT_TYPE.RIGHT_SIDE_BRUSH_CURRENT_LARGE_CURRENT_WARNING]: "Right side brush high current",
-    [ALERT_TYPE.FALL_STATE_WARNING]: "Cliff sensor warning",
-    [ALERT_TYPE.LEFT_WHEEL_CURRENT_LARGE_CURRENT_WARNING]: "Left wheel high current",
-    [ALERT_TYPE.RIGHT_WHEEL_CURRENT_LARGE_CURRENT_WARNING]: "Right wheel high current",
-    [ALERT_TYPE.LEFT_BUMP_REPEAT_TRIGE_WARNING]: "Left bumper repeated trigger",
-    [ALERT_TYPE.RIGHT_BUMP_REPEAT_TRIGE_WARNING]: "Right bumper repeated trigger",
-    [ALERT_TYPE.BUMP_LONG_TIMER_TRIGE_WARNING]: "Bumper stuck (warning)",
-    [ALERT_TYPE.BUMP_LONG_TIMER_TRIGE_ERROR]: "Bumper stuck",
-    [ALERT_TYPE.BUMP_LONG_TIMER_NO_TRIGE_ERROR]: "Bumper not responding",
-    [ALERT_TYPE.DEGREE_NO_CHANGE_WARNING]: "Heading unchanged (warning)",
-    [ALERT_TYPE.DEGREE_NO_CHANGE_ERROR]: "Heading unchanged",
-    [ALERT_TYPE.LEFT_WHEEL_SPEED_ERROR]: "Left wheel speed error",
-    [ALERT_TYPE.RIGHT_WHEEL_SPEED_ERROR]: "Right wheel speed error",
-    [ALERT_TYPE.FAN_SPEED_ERROR]: "Fan speed error",
-    [ALERT_TYPE.POSE_NO_CHANGE_WARNING]: "Robot not moving",
-    [ALERT_TYPE.ROLL_GESTURE_SLOPE_WARNING]: "Robot tilted sideways",
-    [ALERT_TYPE.PITCH_GESTURE_SLOPE_WARNING]: "Robot tilted forward/backward",
-    [ALERT_TYPE.ROBOT_BEEN_MOVED_DURING_IDLE]: "Robot moved while idle",
-    [ALERT_TYPE.NO_RETURN_CHARGE_WARNING]: "Cannot find charging station",
-    [ALERT_TYPE.FAN_SPEED_STATE_CHANGED_WARNING]: "Fan speed changed unexpectedly",
-    [ALERT_TYPE.ROBOT_STUCK_ERROR]: "Robot stuck",
-    [ALERT_TYPE.LDS_ERROR]: "LDS (laser) sensor error",
-    [ALERT_TYPE.ULTRA_WATERBOX_WARNING]: "Water tank warning",
-    [ALERT_TYPE.ULTRA_WATERBOX_ERROR]: "Water tank error",
-};
-
-/**
- * Maps alert type IDs to ValetudoRobotError subsystems.
- * @type {Object<number, string>}
- */
-const ALERT_SUBSYSTEM_MAP = {
-    [ALERT_TYPE.DIRT_BOX_STATE]: ValetudoRobotError.SUBSYSTEM.ATTACHMENTS,
-    [ALERT_TYPE.WATER_BOX_STATE]: ValetudoRobotError.SUBSYSTEM.ATTACHMENTS,
-    [ALERT_TYPE.FALL_ERROR]: ValetudoRobotError.SUBSYSTEM.SENSORS,
-    [ALERT_TYPE.BRUSH_CURRENT_STATE_ERROR]: ValetudoRobotError.SUBSYSTEM.MOTORS,
-    [ALERT_TYPE.SIDE_BRUSH_CURRENT_ERROR]: ValetudoRobotError.SUBSYSTEM.MOTORS,
-    [ALERT_TYPE.LEFT_WHEEL_CURRENT_ERROR]: ValetudoRobotError.SUBSYSTEM.MOTORS,
-    [ALERT_TYPE.RIGHT_WHEEL_CURRENT_ERROR]: ValetudoRobotError.SUBSYSTEM.MOTORS,
-    [ALERT_TYPE.DOWNIN_ERROR]: ValetudoRobotError.SUBSYSTEM.SENSORS,
-    [ALERT_TYPE.BUMP_LONG_TIMER_TRIGE_ERROR]: ValetudoRobotError.SUBSYSTEM.SENSORS,
-    [ALERT_TYPE.BUMP_LONG_TIMER_NO_TRIGE_ERROR]: ValetudoRobotError.SUBSYSTEM.SENSORS,
-    [ALERT_TYPE.DEGREE_NO_CHANGE_ERROR]: ValetudoRobotError.SUBSYSTEM.NAVIGATION,
-    [ALERT_TYPE.LEFT_WHEEL_SPEED_ERROR]: ValetudoRobotError.SUBSYSTEM.MOTORS,
-    [ALERT_TYPE.RIGHT_WHEEL_SPEED_ERROR]: ValetudoRobotError.SUBSYSTEM.MOTORS,
-    [ALERT_TYPE.FAN_SPEED_ERROR]: ValetudoRobotError.SUBSYSTEM.MOTORS,
-    [ALERT_TYPE.ROBOT_STUCK_ERROR]: ValetudoRobotError.SUBSYSTEM.NAVIGATION,
-    [ALERT_TYPE.LDS_ERROR]: ValetudoRobotError.SUBSYSTEM.SENSORS,
-    [ALERT_TYPE.ULTRA_WATERBOX_ERROR]: ValetudoRobotError.SUBSYSTEM.ATTACHMENTS,
-};
-
-/**
- * @param {number} alertType
- * @returns {string}
- */
-function alertTypeName(alertType) {
-    return ALERT_TYPE_NAMES[alertType] ?? `Unknown alert (${alertType})`;
-}
-
-/**
- * Find the most severe error-level alert from a list of triggered alerts.
- * Returns the first error-level alert, or null if none are errors.
- *
- * @param {Array<{type: number, state: number}>} triggeredAlerts
- * @returns {{type: number, state: number}|null}
- */
-function findMostSevereErrorAlert(triggeredAlerts) {
-    for (const alert of triggeredAlerts) {
-        if (ERROR_ALERT_TYPES.has(alert.type)) {
-            return alert;
-        }
-    }
-    return null;
-}
-
-/**
- * Map an alert type ID to a ValetudoRobotError.
- *
- * @param {number} alertType
- * @returns {ValetudoRobotError}
- */
-function mapAlertToRobotError(alertType) {
-    return new ValetudoRobotError({
-        severity: {
-            kind: ValetudoRobotError.SEVERITY_KIND.TRANSIENT,
-            level: ValetudoRobotError.SEVERITY_LEVEL.ERROR,
-        },
-        subsystem: ALERT_SUBSYSTEM_MAP[alertType] ?? ValetudoRobotError.SUBSYSTEM.UNKNOWN,
-        message: alertTypeName(alertType),
-        vendorErrorCode: String(alertType)
-    });
-}
-
-/**
- * @param {number} level
- * @param {number} isSilent
- * @returns {{type:string,value:string,customValue?:number}}
- */
-function fanLevelToPresetValue(level, isSilent) {
-    const fanLevel = Number(level);
-    const silent = Number(isSilent) > 0;
-    const presetType = stateAttrs.PresetSelectionStateAttribute.TYPE.FAN_SPEED;
-    if (silent) {
-        return {
-            type: presetType,
-            value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.OFF
-        };
-    }
-    if (fanLevel === 0) {
-        return {
-            type: presetType,
-            value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.LOW
-        };
-    }
-    if (fanLevel === 1) {
-        return {
-            type: presetType,
-            value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.HIGH
-        };
-    }
-    if (fanLevel === 2) {
-        return {
-            type: presetType,
-            value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.MAX
-        };
-    }
-
-    return {
-        type: presetType,
-        value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.CUSTOM,
-        customValue: Number.isFinite(fanLevel) ? fanLevel : 0
-    };
-}
-
-/**
- * @param {number} level
- * @returns {{type:string,value:string,customValue?:number}}
- */
-function waterLevelToPresetValue(level) {
-    const waterLevel = Number(level);
-    const presetType = stateAttrs.PresetSelectionStateAttribute.TYPE.WATER_GRADE;
-    if (waterLevel === 0) {
-        return {
-            type: presetType,
-            value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.LOW
-        };
-    }
-    if (waterLevel === 1) {
-        return {
-            type: presetType,
-            value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.MEDIUM
-        };
-    }
-    if (waterLevel === 2) {
-        return {
-            type: presetType,
-            value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.HIGH
-        };
-    }
-    if (waterLevel === 3) {
-        return {
-            type: presetType,
-            value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.MAX
-        };
-    }
-
-    return {
-        type: presetType,
-        value: stateAttrs.PresetSelectionStateAttribute.INTENSITY.CUSTOM,
-        customValue: Number.isFinite(waterLevel) ? waterLevel : 0
-    };
-}
-
-/**
- * Check whether the dynamic entities (robot, charger, path) in the current
- * map already match the newly computed ones by comparing points arrays
- * element-by-element. Avoids JSON.stringify on every live-position poll.
- *
- * @param {Array<any>} currentEntities
- * @param {Array<any>} newDynamic
- * @returns {boolean}
- */
-function areDynamicEntitiesUnchanged(currentEntities, newDynamic) {
-    const oldEntities = Array.isArray(currentEntities) ? currentEntities : [];
-    for (const newEntity of newDynamic) {
-        const match = oldEntities.find(e => e?.type === newEntity?.type);
-        if (!match) {
-            return false;
-        }
-        const oldPts = match.points;
-        const newPts = newEntity.points;
-        if (!Array.isArray(oldPts) || !Array.isArray(newPts) || oldPts.length !== newPts.length) {
-            return false;
-        }
-        for (let i = 0; i < oldPts.length; i++) {
-            if (oldPts[i] !== newPts[i]) {
-                return false;
-            }
-        }
-        // Compare angle metadata (robot position)
-        if ((match.metaData?.angle ?? 0) !== (newEntity.metaData?.angle ?? 0)) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-/**
- * @param {import("../../entities/map/ValetudoMap")} map
- * @returns {number}
- */
-function estimateMapPayloadBytes(map) {
-    try {
-        return Buffer.byteLength(JSON.stringify(map), "utf8");
-    } catch (e) {
-        return -1;
-    }
-}
-
-/**
- * @param {import("../../entities/map/ValetudoMap")} map
- * @param {string} layerType
- * @returns {number}
- */
-function getLayerPixelCountByType(map, layerType) {
-    const layers = Array.isArray(map?.layers) ? map.layers : [];
-
-    return layers
-        .filter(layer => layer?.type === layerType)
-        .reduce((sum, layer) => {
-            const px = Number(layer?.dimensions?.pixelCount ?? 0);
-
-            return sum + (Number.isFinite(px) ? px : 0);
-        }, 0);
-}
