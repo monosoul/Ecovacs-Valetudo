@@ -2,182 +2,8 @@ const Logger = require("../../../Logger");
 const mapEntities = require("../../../entities/map");
 const {worldMmToMapPointCm} = require("./EcovacsMapTransforms");
 
-const PIXEL_KEY_STRIDE = 65536;
-
 /**
- * @param {Array<any>} rooms
- * @param {any} positions
- * @param {{x:number,y:number,angle:number}|null} robotPose
- * @param {object} [compressedMap]
- * @param {Array<{vwid:number,type:number,dots:Array<[number,number]>}>} [virtualWalls]
- * @param {{pixelSizeCm:number, cachedRoomCleaningPreferences:Object<string,{suction:number,water:number,times:number,sequence:number}>}} options
- * @returns {import("../../../entities/map/ValetudoMap")}
- */
-function buildMapFromRooms(rooms, positions, robotPose, compressedMap, virtualWalls, options) {
-    const pixelSizeCm = compressedMap?.resolutionCm ?? options.pixelSizeCm;
-    const parsedRooms = rooms.map(room => {
-        const polygon = Array.isArray(room.polygon) ? room.polygon : [];
-
-        const cached = options.cachedRoomCleaningPreferences[String(room.index)] ?? {};
-
-        return {
-            index: String(room.index ?? "0"),
-            labelName: room.label_name ?? `Room ${room.index ?? 0}`,
-            preference_times: room.preference_times ?? cached.times,
-            preference_water: room.preference_water ?? cached.water,
-            preference_suction: room.preference_suction ?? cached.suction,
-            preference_sequence: room.preference_sequence ?? cached.sequence ?? 0,
-            polygonCm: polygon.map(point => {
-                return {
-                    x: Math.round(Number(point[0]) / 10),
-                    y: Math.round(Number(point[1]) / 10)
-                };
-            })
-        };
-    }).filter(room => room.polygonCm.length >= 3);
-
-    let minX = Infinity;
-    let maxX = -Infinity;
-    let minY = Infinity;
-    let maxY = -Infinity;
-    for (const room of parsedRooms) {
-        for (const p of room.polygonCm) {
-            if (p.x < minX) {
-                minX = p.x;
-            }
-            if (p.x > maxX) {
-                maxX = p.x;
-            }
-            if (p.y < minY) {
-                minY = p.y;
-            }
-            if (p.y > maxY) {
-                maxY = p.y;
-            }
-        }
-    }
-    const marginCm = pixelSizeCm * 4;
-    const mapWidthPx = Math.ceil((maxX - minX + 2 * marginCm) / pixelSizeCm) + 1;
-    const mapHeightPx = Math.ceil((maxY - minY + 2 * marginCm) / pixelSizeCm) + 1;
-
-    const worldToGrid = (point) => {
-        const shiftedX = point.x - minX + marginCm;
-        const shiftedY = maxY - point.y + marginCm;
-
-        return {
-            x: Math.floor(shiftedX / pixelSizeCm),
-            y: Math.floor(shiftedY / pixelSizeCm)
-        };
-    };
-
-    const floorPixelSet = new Set();
-    const segmentLayers = [];
-    parsedRooms.forEach(room => {
-        const gridPolygon = room.polygonCm.map(worldToGrid);
-        const pixels = rasterizePolygon(gridPolygon);
-        if (pixels.length === 0) {
-            return;
-        }
-
-        pixels.forEach(pixel => {
-            floorPixelSet.add(pixel[0] * PIXEL_KEY_STRIDE + pixel[1]);
-        });
-
-        segmentLayers.push(new mapEntities.MapLayer({
-            type: mapEntities.MapLayer.TYPE.SEGMENT,
-            pixels: pixels.sort(mapEntities.MapLayer.COORDINATE_TUPLE_SORT).flat(),
-            metaData: buildSegmentMetaData(room.index, room.labelName, room, {})
-        }));
-    });
-
-    let rasterFloorPixels = unpackPixelKeys(floorPixelSet);
-    let rasterWallPixels = [];
-    if (compressedMap) {
-        try {
-            const projected = projectCompressedMapToGrid(compressedMap, mapWidthPx, mapHeightPx, floorPixelSet);
-            if (projected.floorPixels.length > 0) {
-                rasterFloorPixels = projected.floorPixels;
-            }
-            rasterWallPixels = projected.wallPixels;
-        } catch (e) {
-            Logger.warn("Failed to project compressed Ecovacs raster into room grid", e);
-        }
-    }
-
-    const layers = [];
-    if (rasterFloorPixels.length > 0) {
-        layers.push(new mapEntities.MapLayer({
-            type: mapEntities.MapLayer.TYPE.FLOOR,
-            pixels: rasterFloorPixels.sort(mapEntities.MapLayer.COORDINATE_TUPLE_SORT).flat()
-        }));
-    }
-    if (rasterWallPixels.length > 0) {
-        layers.push(new mapEntities.MapLayer({
-            type: mapEntities.MapLayer.TYPE.WALL,
-            pixels: rasterWallPixels.sort(mapEntities.MapLayer.COORDINATE_TUPLE_SORT).flat()
-        }));
-    }
-    layers.push(...segmentLayers);
-
-    const mapItems = [];
-    const chargerPose = positions?.charger?.pose;
-    if (chargerPose && typeof chargerPose.x === "number" && typeof chargerPose.y === "number") {
-        const chargerGrid = worldToGrid({
-            x: Math.round(chargerPose.x / 10),
-            y: Math.round(chargerPose.y / 10)
-        });
-        mapItems.push(new mapEntities.PointMapEntity({
-            type: mapEntities.PointMapEntity.TYPE.CHARGER_LOCATION,
-            points: [
-                chargerGrid.x * pixelSizeCm,
-                chargerGrid.y * pixelSizeCm
-            ]
-        }));
-    }
-    if (robotPose) {
-        const robotGrid = worldToGrid({
-            x: Math.round(robotPose.x / 10),
-            y: Math.round(robotPose.y / 10)
-        });
-        mapItems.push(new mapEntities.PointMapEntity({
-            type: mapEntities.PointMapEntity.TYPE.ROBOT_POSITION,
-            points: [
-                robotGrid.x * pixelSizeCm,
-                robotGrid.y * pixelSizeCm
-            ],
-            metaData: {
-                angle: Number.isFinite(robotPose.angle) ? robotPose.angle : 0
-            }
-        }));
-    }
-
-    const mapWidthCm = mapWidthPx * pixelSizeCm;
-    const mapHeightCm = mapHeightPx * pixelSizeCm;
-    const transform = {
-        type: "rooms",
-        marginCm: marginCm,
-        maxY: maxY,
-        minX: minX,
-        pixelSizeCm: pixelSizeCm
-    };
-    mapItems.push(...buildRestrictionEntities(transform, pixelSizeCm, virtualWalls));
-
-    return new mapEntities.ValetudoMap({
-        size: {
-            x: mapWidthCm,
-            y: mapHeightCm
-        },
-        pixelSize: pixelSizeCm,
-        layers: layers,
-        entities: mapItems,
-        metaData: {
-            ecovacsTransform: transform
-        }
-    });
-}
-
-/**
- * Build detailed raster and overlays with the same transforms used by
+ * Build raster map and overlays with the same transforms used by
  * scripts/decode_map_dump.py + scripts/render_rooms_overlay.py.
  *
  * @param {Array<any>} rooms
@@ -188,7 +14,7 @@ function buildMapFromRooms(rooms, positions, robotPose, compressedMap, virtualWa
  * @param {{rotationDegrees:number, worldMmPerPixel:number, cachedRoomCleaningPreferences:Object<string,{suction:number,water:number,times:number,sequence:number}>}} options
  * @returns {import("../../../entities/map/ValetudoMap")}
  */
-function buildDetailedMapAlignedToSimplified(rooms, positions, robotPose, compressedMap, virtualWalls, options) {
+function buildMap(rooms, positions, robotPose, compressedMap, virtualWalls, options) {
     const pixelSizeCm = Number(compressedMap.resolutionCm);
     if (!Number.isFinite(pixelSizeCm) || pixelSizeCm <= 0) {
         throw new Error("Invalid compressed map pixel size");
@@ -311,7 +137,6 @@ function buildDetailedMapAlignedToSimplified(rooms, positions, robotPose, compre
         mapWidthPx: mapWidthPx,
         mmPerPixel: mmPerPixel,
         rotationDegrees: mapRotation,
-        type: "script",
     };
     detailedEntities.push(...buildRestrictionEntities(transform, pixelSizeCm, virtualWalls));
 
@@ -467,164 +292,6 @@ function pointInPolygon(x, y, polygon) {
     }
 
     return inside;
-}
-
-/**
- * @param {{width:number,height:number,floorPixels:Array<[number,number]>,wallPixels:Array<[number,number]>}} compressedMap
- * @param {number} targetWidth
- * @param {number} targetHeight
- * @param {Set<number>} roomFloorSet  packed pixel keys (x * PIXEL_KEY_STRIDE + y)
- * @returns {{floorPixels:Array<[number,number]>,wallPixels:Array<[number,number]>}}
- */
-function projectCompressedMapToGrid(compressedMap, targetWidth, targetHeight, roomFloorSet) {
-    const projectionStartedAt = Date.now();
-    const orientation = chooseBestProjectionOrientation(compressedMap, targetWidth, targetHeight, roomFloorSet);
-    const floorSet = new Set();
-    const wallSet = new Set();
-
-    for (const [sx, sy] of compressedMap.floorPixels) {
-        const p = projectSourcePointToTarget(sx, sy, compressedMap.width, compressedMap.height, targetWidth, targetHeight, orientation);
-        if (p) {
-            floorSet.add(p[0] * PIXEL_KEY_STRIDE + p[1]);
-        }
-    }
-    for (const [sx, sy] of compressedMap.wallPixels) {
-        const p = projectSourcePointToTarget(sx, sy, compressedMap.width, compressedMap.height, targetWidth, targetHeight, orientation);
-        if (p) {
-            wallSet.add(p[0] * PIXEL_KEY_STRIDE + p[1]);
-        }
-    }
-
-    const floorPixels = unpackPixelKeys(floorSet);
-    const wallPixels = unpackPixelKeys(wallSet);
-    Logger.debug(
-        `Ecovacs compressed map projection: orientation=${orientation}, floor=${floorPixels.length}, wall=${wallPixels.length}, took=${Date.now() - projectionStartedAt}ms`
-    );
-
-    return {
-        floorPixels: floorPixels,
-        wallPixels: wallPixels
-    };
-}
-
-/**
- * @param {{width:number,height:number,floorPixels:Array<[number,number]>}} compressedMap
- * @param {number} targetWidth
- * @param {number} targetHeight
- * @param {Set<number>} roomFloorSet  packed pixel keys (x * PIXEL_KEY_STRIDE + y)
- * @returns {number}
- */
-function chooseBestProjectionOrientation(compressedMap, targetWidth, targetHeight, roomFloorSet) {
-    const maxSample = 4000;
-    const step = Math.max(1, Math.floor(compressedMap.floorPixels.length / maxSample));
-
-    let bestOrientation = 0;
-    let bestScore = -1;
-    for (let orientation = 0; orientation < 8; orientation++) {
-        let score = 0;
-        let checked = 0;
-        for (let i = 0; i < compressedMap.floorPixels.length; i += step) {
-            const [sx, sy] = compressedMap.floorPixels[i];
-            const p = projectSourcePointToTarget(
-                sx,
-                sy,
-                compressedMap.width,
-                compressedMap.height,
-                targetWidth,
-                targetHeight,
-                orientation
-            );
-            if (!p) {
-                continue;
-            }
-            checked++;
-            if (roomFloorSet.has(p[0] * PIXEL_KEY_STRIDE + p[1])) {
-                score++;
-            }
-        }
-        const normalized = checked > 0 ? (score / checked) : 0;
-        if (normalized > bestScore) {
-            bestScore = normalized;
-            bestOrientation = orientation;
-        }
-    }
-
-    return bestOrientation;
-}
-
-/**
- * @param {number} sx
- * @param {number} sy
- * @param {number} srcWidth
- * @param {number} srcHeight
- * @param {number} targetWidth
- * @param {number} targetHeight
- * @param {number} orientation
- * @returns {[number, number]|null}
- */
-function projectSourcePointToTarget(sx, sy, srcWidth, srcHeight, targetWidth, targetHeight, orientation) {
-    const transformed = orientPoint(sx, sy, srcWidth, srcHeight, orientation);
-    if (!transformed) {
-        return null;
-    }
-    const [ox, oy, ow, oh] = transformed;
-    if (ow <= 1 || oh <= 1 || targetWidth <= 1 || targetHeight <= 1) {
-        return null;
-    }
-
-    const tx = Math.round((ox / (ow - 1)) * (targetWidth - 1));
-    const ty = Math.round((oy / (oh - 1)) * (targetHeight - 1));
-    if (tx < 0 || ty < 0 || tx >= targetWidth || ty >= targetHeight) {
-        return null;
-    }
-
-    return [tx, ty];
-}
-
-/**
- * @param {number} x
- * @param {number} y
- * @param {number} width
- * @param {number} height
- * @param {number} orientation
- * @returns {[number, number, number, number]|null}
- */
-function orientPoint(x, y, width, height, orientation) {
-    switch (orientation) {
-        case 0:
-            return [x, y, width, height];
-        case 1:
-            return [width - 1 - x, y, width, height];
-        case 2:
-            return [x, height - 1 - y, width, height];
-        case 3:
-            return [width - 1 - x, height - 1 - y, width, height];
-        case 4:
-            return [y, x, height, width];
-        case 5:
-            return [height - 1 - y, x, height, width];
-        case 6:
-            return [y, width - 1 - x, height, width];
-        case 7:
-            return [height - 1 - y, width - 1 - x, height, width];
-        default:
-            return null;
-    }
-}
-
-/**
- * Unpack a Set of numeric pixel keys (x * PIXEL_KEY_STRIDE + y) into an array of [x, y] tuples.
- *
- * @param {Set<number>} set
- * @returns {Array<[number, number]>}
- */
-function unpackPixelKeys(set) {
-    const result = [];
-    for (const key of set) {
-        result.push([(key / PIXEL_KEY_STRIDE) | 0, key % PIXEL_KEY_STRIDE]);
-    }
-
-    return result;
 }
 
 /**
@@ -832,7 +499,6 @@ function areDynamicEntitiesUnchanged(currentEntities, newDynamic) {
 }
 
 module.exports = {
-    buildDetailedMapAlignedToSimplified: buildDetailedMapAlignedToSimplified,
-    buildMapFromRooms: buildMapFromRooms,
+    buildMap: buildMap,
     rebuildEntitiesOnlyMap: rebuildEntitiesOnlyMap,
 };

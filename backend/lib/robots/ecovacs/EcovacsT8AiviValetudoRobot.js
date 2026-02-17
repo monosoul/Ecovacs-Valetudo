@@ -33,7 +33,7 @@ const {
     waterLevelToPresetValue,
 } = require("./EcovacsStateMapping");
 const {alertTypeName, findMostSevereErrorAlert, mapAlertToRobotError} = require("./EcovacsAlertMapping");
-const {buildDetailedMapAlignedToSimplified, buildMapFromRooms, rebuildEntitiesOnlyMap} = require("./map/EcovacsMapBuilder");
+const {buildMap, rebuildEntitiesOnlyMap} = require("./map/EcovacsMapBuilder");
 const {clampInt, mapCmToWorldMm, worldMmToMapPointCm} = require("./map/EcovacsMapTransforms");
 const {decodeCompressedMapResponse} = require("./map/EcovacsCompressedMapDecoder");
 const {decodeTraceRawHexToWorldMmPoints} = require("./map/EcovacsTraceDecoder");
@@ -53,11 +53,8 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
 
         const implementationSpecificConfig = options.config.get("robot")?.implementationSpecificConfig ?? {};
 
-        this.mapPixelSizeCm = implementationSpecificConfig.mapPixelSizeCm ?? 5;
-        this.detailedMapUpgradeEnabled = implementationSpecificConfig.detailedMapUpgradeEnabled ?? true;
         this.detailedMapMaxLayerPixels = implementationSpecificConfig.detailedMapMaxLayerPixels ?? 120_000;
         this.detailedMapMinFloorPixels = implementationSpecificConfig.detailedMapMinFloorPixels ?? 1_000;
-        this.detailedMapMinFloorCoverageRatio = implementationSpecificConfig.detailedMapMinFloorCoverageRatio ?? 0.2;
         this.detailedMapRefreshIntervalMs = implementationSpecificConfig.detailedMapRefreshIntervalMs ?? 120_000;
         this.detailedMapRotationDegrees = implementationSpecificConfig.detailedMapRotationDegrees ?? 270;
         this.detailedMapWorldMmPerPixel = implementationSpecificConfig.detailedMapWorldMmPerPixel ?? 50;
@@ -300,117 +297,72 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             this.updateRobotPoseFromPositions(positions);
             const robotPoseSnapshot = this.getCurrentRobotPoseOrNull();
 
-            const simplifiedMap = buildMapFromRooms(
+            let compressedMap = this.cachedCompressedMap;
+            const cacheAgeMs = Date.now() - this.cachedCompressedMapAt;
+            const cacheValid = compressedMap !== null && cacheAgeMs >= 0 && cacheAgeMs < this.detailedMapRefreshIntervalMs;
+            if (cacheValid) {
+                Logger.debug(`Ecovacs map poll: using cached compressed map (${cacheAgeMs}ms old)`);
+            } else {
+                Logger.debug("Ecovacs map poll: fetching compressed map");
+                const compressedRaw = await this.mapService.getCompressedMap(mapId);
+
+                // Update activeMapId from the compressed map response
+                if (Number.isInteger(compressedRaw?.mapid)) {
+                    const responseMapId = compressedRaw.mapid >>> 0;
+                    if (this.activeMapId !== responseMapId) {
+                        Logger.info(`Ecovacs: active map ID changed from ${this.activeMapId} to ${responseMapId} (from compressed map)`);
+                        this.activeMapId = responseMapId;
+                    }
+                }
+
+                Logger.debug("Ecovacs map poll: decoding compressed map submaps");
+                compressedMap = decodeCompressedMapResponse(compressedRaw);
+                this.cachedCompressedMap = compressedMap;
+                this.cachedCompressedMapAt = Date.now();
+                Logger.debug(
+                    `Ecovacs map poll: decoded compressed map (${compressedMap.width}x${compressedMap.height})`
+                );
+            }
+            const map = buildMap(
                 roomDump.rooms,
                 positions,
                 robotPoseSnapshot,
-                undefined,
+                compressedMap,
                 virtualWalls,
                 {
-                    pixelSizeCm: this.mapPixelSizeCm,
+                    rotationDegrees: this.detailedMapRotationDegrees,
+                    worldMmPerPixel: this.detailedMapWorldMmPerPixel,
                     cachedRoomCleaningPreferences: this.cachedRoomCleaningPreferences,
                 }
             );
-            const simplifiedWithDynamicEntities = rebuildEntitiesOnlyMap(
-                simplifiedMap,
+            const mapWithEntities = rebuildEntitiesOnlyMap(
+                map,
                 positions,
                 robotPoseSnapshot,
                 this.tracePathPointsMm
-            ) ?? simplifiedMap;
+            ) ?? map;
+            const totalPixels = getTotalLayerPixelCount(map);
+            const floorPixels = getLayerPixelCountByType(mapWithEntities, mapEntities.MapLayer.TYPE.FLOOR);
             if (this.rosDebug) {
-                Logger.info(`Ecovacs map poll: simplified map stats ${formatMapStats(simplifiedWithDynamicEntities)}`);
+                Logger.info(`Ecovacs map poll: map stats ${formatMapStats(mapWithEntities)}`);
             }
             Logger.debug(
-                `Ecovacs entities: simplified robot=${hasRobotEntity(simplifiedWithDynamicEntities)} charger=${hasChargerEntity(simplifiedWithDynamicEntities)}`
+                `Ecovacs entities: robot=${hasRobotEntity(mapWithEntities)} charger=${hasChargerEntity(mapWithEntities)}`
             );
-
-            // Publish only detailed map in normal flow.
-            try {
-                const detailedMapStart = Date.now();
-                let compressedMap = this.cachedCompressedMap;
-                const cacheAgeMs = Date.now() - this.cachedCompressedMapAt;
-                const cacheValid = compressedMap !== null && cacheAgeMs >= 0 && cacheAgeMs < this.detailedMapRefreshIntervalMs;
-                if (cacheValid) {
-                    Logger.debug(`Ecovacs map poll: using cached compressed map (${cacheAgeMs}ms old)`);
-                } else {
-                    Logger.debug("Ecovacs map poll: fetching compressed map");
-                    const compressedRaw = await this.mapService.getCompressedMap(mapId);
-
-                    // Update activeMapId from the compressed map response
-                    if (Number.isInteger(compressedRaw?.mapid)) {
-                        const responseMapId = compressedRaw.mapid >>> 0;
-                        if (this.activeMapId !== responseMapId) {
-                            Logger.info(`Ecovacs: active map ID changed from ${this.activeMapId} to ${responseMapId} (from compressed map)`);
-                            this.activeMapId = responseMapId;
-                        }
-                    }
-
-                    Logger.debug("Ecovacs map poll: decoding compressed map submaps");
-                    compressedMap = decodeCompressedMapResponse(compressedRaw);
-                    this.cachedCompressedMap = compressedMap;
-                    this.cachedCompressedMapAt = Date.now();
-                    Logger.debug(
-                        `Ecovacs map poll: decoded compressed map (${compressedMap.width}x${compressedMap.height})`
-                    );
-                }
-                const detailedMap = buildDetailedMapAlignedToSimplified(
-                    roomDump.rooms,
-                    positions,
-                    robotPoseSnapshot,
-                    compressedMap,
-                    virtualWalls,
-                    {
-                        rotationDegrees: this.detailedMapRotationDegrees,
-                        worldMmPerPixel: this.detailedMapWorldMmPerPixel,
-                        cachedRoomCleaningPreferences: this.cachedRoomCleaningPreferences,
-                    }
+            if (totalPixels > this.detailedMapMaxLayerPixels) {
+                Logger.warn(
+                    `Ecovacs map poll: map too large (${totalPixels} px > ${this.detailedMapMaxLayerPixels} px), skipping`
                 );
-                const detailedWithDynamicEntities = rebuildEntitiesOnlyMap(
-                    detailedMap,
-                    positions,
-                    robotPoseSnapshot,
-                    this.tracePathPointsMm
-                ) ?? detailedMap;
-                const detailedPixels = getTotalLayerPixelCount(detailedMap);
-                const simpleFloorPixels = getLayerPixelCountByType(simplifiedWithDynamicEntities, mapEntities.MapLayer.TYPE.FLOOR);
-                const detailedFloorPixels = getLayerPixelCountByType(detailedWithDynamicEntities, mapEntities.MapLayer.TYPE.FLOOR);
-                const floorCoverageRatio = simpleFloorPixels > 0 ? (detailedFloorPixels / simpleFloorPixels) : 0;
-                if (this.rosDebug) {
-                    Logger.info(`Ecovacs map poll: detailed map stats ${formatMapStats(detailedWithDynamicEntities)}`);
-                }
-                Logger.debug(
-                    `Ecovacs entities: detailed robot=${hasRobotEntity(detailedWithDynamicEntities)} charger=${hasChargerEntity(detailedWithDynamicEntities)}`
-                );
-                if (detailedPixels > this.detailedMapMaxLayerPixels) {
-                    Logger.warn(
-                        `Ecovacs map poll: detailed map too large (${detailedPixels} px > ${this.detailedMapMaxLayerPixels} px), keeping simplified map`
-                    );
-                    return;
-                }
-                if (detailedFloorPixels < this.detailedMapMinFloorPixels) {
-                    Logger.warn(
-                        `Ecovacs map poll: detailed floor too small (${detailedFloorPixels} px < ${this.detailedMapMinFloorPixels} px), keeping simplified map`
-                    );
-                    return;
-                }
-                if (floorCoverageRatio < this.detailedMapMinFloorCoverageRatio) {
-                    Logger.warn(
-                        `Ecovacs map poll: detailed floor coverage too low (${floorCoverageRatio.toFixed(3)} < ${this.detailedMapMinFloorCoverageRatio}), using simplified fallback`
-                    );
-                    this.state.map = simplifiedWithDynamicEntities;
-                    this.emitMapUpdated();
-                    return;
-                }
-                this.state.map = detailedWithDynamicEntities;
-                this.emitMapUpdated();
-                if (this.rosDebug) {
-                    Logger.info(`Ecovacs map poll: detailed map upgraded in ${Date.now() - detailedMapStart}ms`);
-                }
-            } catch (e) {
-                Logger.warn("Ecovacs map poll: detailed map unavailable, using simplified fallback", e?.message ?? e);
-                this.state.map = simplifiedWithDynamicEntities;
-                this.emitMapUpdated();
+                return;
             }
+            if (floorPixels < this.detailedMapMinFloorPixels) {
+                Logger.warn(
+                    `Ecovacs map poll: floor too small (${floorPixels} px < ${this.detailedMapMinFloorPixels} px), skipping`
+                );
+                return;
+            }
+            this.state.map = mapWithEntities;
+            this.emitMapUpdated();
         } catch (e) {
             Logger.warn("Failed to poll Ecovacs map", e);
             throw e;

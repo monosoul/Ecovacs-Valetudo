@@ -253,13 +253,10 @@ All keys live under `robot.implementationSpecificConfig`.
 
 | Key | Default | Description |
 |---|---|---|
-| `mapPixelSizeCm` | `5` | Pixel size in cm for the room-polygon-based map |
-| `detailedMapUpgradeEnabled` | `true` | Use compressed raster map with full transforms instead of simplified room-only map |
 | `detailedMapRotationDegrees` | `270` | Clockwise rotation applied to the compressed raster |
 | `detailedMapWorldMmPerPixel` | `50` | World-space mm per raster pixel |
 | `detailedMapMaxLayerPixels` | `120000` | Max pixels per map layer before skipping detailed upgrade |
 | `detailedMapMinFloorPixels` | `1000` | Min floor pixels required for detailed map to be valid |
-| `detailedMapMinFloorCoverageRatio` | `0.2` | Min ratio of raster floor pixels vs room polygon pixels |
 | `detailedMapRefreshIntervalMs` | `120000` | How often to re-fetch the compressed raster map |
 
 ### Polling intervals
