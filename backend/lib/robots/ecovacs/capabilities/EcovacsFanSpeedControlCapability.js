@@ -32,7 +32,7 @@ class EcovacsFanSpeedControlCapability extends FanSpeedControlCapability {
         }
 
         const target = fanPresetToFirmware(matchedPreset.name);
-        const result = await this.robot.rosFacade.setFanMode(target.mode, target.isSilent);
+        const result = await this.robot.settingService.setFanMode(target.mode, target.isSilent);
         if (Number(result) !== 0) {
             throw new Error(`setFanMode failed with result=${result}`);
         }

@@ -17,7 +17,7 @@ class EcovacsMapSegmentEditCapability extends MapSegmentEditCapability {
             throw new Error("Cannot merge the same room id");
         }
 
-        const response = await this.robot.rosFacade.mergeRooms(mapId, [roomIdA, roomIdB]);
+        const response = await this.robot.spotAreaService.mergeRooms(mapId, [roomIdA, roomIdB]);
         ensureResultOk("mergeRooms", response?.result);
 
         this.robot.pollMap();
@@ -35,7 +35,7 @@ class EcovacsMapSegmentEditCapability extends MapSegmentEditCapability {
         const worldA = this.robot.mapPointToWorld(pA);
         const worldB = this.robot.mapPointToWorld(pB);
 
-        const response = await this.robot.rosFacade.splitRoom(mapId, roomId, [
+        const response = await this.robot.spotAreaService.splitRoom(mapId, roomId, [
             Number(worldA.x),
             Number(worldA.y),
             Number(worldB.x),

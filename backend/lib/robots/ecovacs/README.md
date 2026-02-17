@@ -28,9 +28,9 @@ does not rely on Python helper scripts for runtime robot control.
   - Low-level binary/TCPROS helpers (`BinaryCursor`, `BufferedTcpSocket`, `tcpros`).
 - `ros/core/*`
   - Reusable connection and endpoint discovery primitives (`PersistentServiceClient`, `PredictionPoseSubscriber`, `TopicStateSubscriber`, `RosMasterXmlRpcClient`).
-- `ros/services/EcovacsRosFacade.js`
-  - High-level Ecovacs operations mapped to ROS requests/responses.
-  - Contains all binary serialization/deserialization for service calls.
+- `ros/services/*Service.js`
+  - Domain-specific service classes (`EcovacsMapService`, `EcovacsSpotAreaService`, `EcovacsVirtualWallService`, `EcovacsPositionService`, `EcovacsTraceService`, `EcovacsWorkManageService`, `EcovacsSettingService`, `EcovacsLifespanService`, `EcovacsStatisticsService`, `EcovacsRuntimeStateService`).
+  - Each service owns its ROS client(s)/subscriber(s), binary serialization, and parsing.
 - `ros/services/MdsctlClient.js`
   - Local `mdsctl` command execution wrapper.
 
@@ -197,7 +197,7 @@ Valetudo's `segmentId` — it appears in the UI, in API requests (rename, clean,
 merge, split, preferences), and in map layers.
 
 The `areaid` is extracted from the `GET_SPOTAREAS` binary response by the
-deterministic polygon parser in `EcovacsRosFacade.js`. The room block layout
+deterministic polygon parser in `EcovacsSpotAreaService.js`. The room block layout
 before each polygon is:
 
 ```
@@ -220,10 +220,10 @@ rooms after these operations to pick up the new identifiers.
 
 When adding a new Ecovacs feature:
 
-1. Add request/response serializer/parser logic in `ros/services/EcovacsRosFacade.js`.
+1. Add request/response serializer/parser logic in the appropriate domain service under `ros/services/` (e.g., `EcovacsSettingService.js` for settings, `EcovacsWorkManageService.js` for cleaning commands).
 2. Reuse existing `PersistentServiceClient` where possible, add a new one only when needed.
-3. Expose one high-level facade method with typed arguments/return shape.
-4. Call that method from the relevant capability or robot orchestration code.
+3. Expose one high-level method on the service with typed arguments/return shape.
+4. Call that method from the relevant capability or robot orchestration code via `this.robot.<serviceName>`.
 5. Keep transformation/rendering helpers in separate module-level functions, not inline in capability code.
 
 ## Configuration Keys

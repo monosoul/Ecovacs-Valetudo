@@ -1,6 +1,6 @@
 const ConsumableMonitoringCapability = require("../../../core/capabilities/ConsumableMonitoringCapability");
 const ValetudoConsumable = require("../../../entities/core/ValetudoConsumable");
-const {LIFESPAN_PART} = require("../ros/services/EcovacsRosFacade");
+const {LIFESPAN_PART} = require("../ros/services/EcovacsLifespanService");
 
 /**
  * @extends ConsumableMonitoringCapability<import("../EcovacsT8AiviValetudoRobot")>
@@ -8,10 +8,10 @@ const {LIFESPAN_PART} = require("../ros/services/EcovacsRosFacade");
 class EcovacsConsumableMonitoringCapability extends ConsumableMonitoringCapability {
     async getConsumables() {
         const [mainBrush, sideBrush, hepa, allComponents] = await Promise.all([
-            this.robot.rosFacade.getLifespan(LIFESPAN_PART.MAIN_BRUSH),
-            this.robot.rosFacade.getLifespan(LIFESPAN_PART.SIDE_BRUSH),
-            this.robot.rosFacade.getLifespan(LIFESPAN_PART.HEPA),
-            this.robot.rosFacade.getLifespan(LIFESPAN_PART.ALL)
+            this.robot.lifespanService.getLifespan(LIFESPAN_PART.MAIN_BRUSH),
+            this.robot.lifespanService.getLifespan(LIFESPAN_PART.SIDE_BRUSH),
+            this.robot.lifespanService.getLifespan(LIFESPAN_PART.HEPA),
+            this.robot.lifespanService.getLifespan(LIFESPAN_PART.ALL)
         ]);
 
         const consumables = [
@@ -49,7 +49,7 @@ class EcovacsConsumableMonitoringCapability extends ConsumableMonitoringCapabili
      */
     async resetConsumable(type, subType) {
         const part = toLifespanPart(type, subType);
-        const response = await this.robot.rosFacade.resetLifespan(part);
+        const response = await this.robot.lifespanService.resetLifespan(part);
         if (Number(response?.result) !== 0) {
             throw new Error(`resetLifespan failed with result=${response?.result}`);
         }

@@ -53,7 +53,7 @@ class EcovacsMapSegmentationCapability extends MapSegmentationCapability {
         }
         const mapId = this.robot.getActiveMapId();
 
-        await this.robot.rosFacade.setRoomCleaningPreferences(
+        await this.robot.spotAreaService.setRoomCleaningPreferences(
             mapId,
             roomId,
             preferences.times,
@@ -111,7 +111,7 @@ class EcovacsMapSegmentationCapability extends MapSegmentationCapability {
             };
         });
 
-        await this.robot.rosFacade.setRoomCleaningSequence(mapId, sequence);
+        await this.robot.spotAreaService.setRoomCleaningSequence(mapId, sequence);
 
         // Update cache
         for (const entry of sequence) {
@@ -148,7 +148,7 @@ class EcovacsMapSegmentationCapability extends MapSegmentationCapability {
             throw new Error("No room ids provided for segment cleaning");
         }
 
-        await this.robot.rosFacade.startRoomClean(roomIds);
+        await this.robot.workManageService.startRoomClean(roomIds);
     }
 
     /**

@@ -9,7 +9,7 @@ class EcovacsTotalStatisticsCapability extends TotalStatisticsCapability {
      * @return {Promise<Array<ValetudoDataPoint>>}
      */
     async getStatistics() {
-        const stats = await this.robot.rosFacade.getTotalStatistics();
+        const stats = await this.robot.statisticsService.getTotalStatistics();
 
         return [
             new ValetudoDataPoint({

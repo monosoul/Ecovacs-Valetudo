@@ -31,7 +31,7 @@ class EcovacsWaterUsageControlCapability extends WaterUsageControlCapability {
             throw new Error("Invalid preset");
         }
 
-        const result = await this.robot.rosFacade.setWaterLevel(Number(matchedPreset.value));
+        const result = await this.robot.settingService.setWaterLevel(Number(matchedPreset.value));
         if (Number(result) !== 0) {
             throw new Error(`setWaterLevel failed with result=${result}`);
         }

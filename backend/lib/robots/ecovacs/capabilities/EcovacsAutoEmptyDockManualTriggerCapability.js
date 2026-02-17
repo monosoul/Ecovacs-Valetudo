@@ -24,7 +24,7 @@ class EcovacsAutoEmptyDockManualTriggerCapability extends AutoEmptyDockManualTri
             throw new Error(`autoCollectDirt cooldown active (${remaining}s remaining)`);
         }
 
-        const result = await this.robot.rosFacade.autoCollectDirt();
+        const result = await this.robot.workManageService.autoCollectDirt();
         if (Number(result) !== 0) {
             throw new Error(`autoCollectDirt failed with result=${result}`);
         }

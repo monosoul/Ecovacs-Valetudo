@@ -24,7 +24,7 @@ class EcovacsCombinedVirtualRestrictionsCapability extends CombinedVirtualRestri
         const virtualWalls = [];
         const restrictedZones = [];
         const mapId = requireActiveMapId(this.robot.getActiveMapId());
-        const walls = await this.robot.rosFacade.getVirtualWalls(mapId);
+        const walls = await this.robot.virtualWallService.getVirtualWalls(mapId);
         Logger.debug(`Ecovacs restrictions refresh: mapId=${mapId} walls=${walls.length}`);
         for (const wall of walls) {
             const dots = Array.isArray(wall.dots) ? wall.dots : [];
@@ -84,10 +84,10 @@ class EcovacsCombinedVirtualRestrictionsCapability extends CombinedVirtualRestri
         Logger.debug(
             `Ecovacs restrictions save: mapId=${mapId} walls=${lineWalls.length} zones=${restrictedZones.length}`
         );
-        const existing = await this.robot.rosFacade.getVirtualWalls(mapId);
+        const existing = await this.robot.virtualWallService.getVirtualWalls(mapId);
         for (const wall of existing) {
             try {
-                const result = await this.robot.rosFacade.deleteVirtualWall(mapId, wall.vwid);
+                const result = await this.robot.virtualWallService.deleteVirtualWall(mapId, wall.vwid);
                 ensureResultOk("deleteVirtualWall", result);
             } catch (e) {
                 // Continue best-effort deletion for idempotent full replace flow.
@@ -98,7 +98,7 @@ class EcovacsCombinedVirtualRestrictionsCapability extends CombinedVirtualRestri
         for (const lineWall of lineWalls) {
             const pA = this.robot.mapPointToWorld(lineWall.points.pA);
             const pB = this.robot.mapPointToWorld(lineWall.points.pB);
-            const result = await this.robot.rosFacade.addVirtualWallPoints(
+            const result = await this.robot.virtualWallService.addVirtualWallPoints(
                 mapId, nextId++, 0, [[pA.x, pA.y], [pB.x, pB.y]]
             );
             ensureResultOk("addVirtualWall", result);
@@ -106,10 +106,10 @@ class EcovacsCombinedVirtualRestrictionsCapability extends CombinedVirtualRestri
         for (const zone of restrictedZones) {
             const rect = this.robot.mapZoneToWorldRect(zone);
             if (zone.type === ValetudoRestrictedZone.TYPE.MOP) {
-                const result = await this.robot.rosFacade.addNoMopZone(mapId, nextId++, rect);
+                const result = await this.robot.virtualWallService.addNoMopZone(mapId, nextId++, rect);
                 ensureResultOk("addNoMopZone", result);
             } else {
-                const result = await this.robot.rosFacade.addVirtualWallRect(mapId, nextId++, 0, rect);
+                const result = await this.robot.virtualWallService.addVirtualWallRect(mapId, nextId++, 0, rect);
                 ensureResultOk("addVirtualBoundary", result);
             }
         }

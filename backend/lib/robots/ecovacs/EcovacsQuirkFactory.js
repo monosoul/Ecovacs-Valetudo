@@ -22,13 +22,13 @@ class EcovacsQuirkFactory {
                     description: "Enable or disable automatic dust collection.",
                     options: ["on", "off"],
                     getter: async () => {
-                        return await this.robot.rosFacade.getAutoCollectEnabled();
+                        return await this.robot.settingService.getAutoCollectEnabled();
                     },
                     setter: async (value) => {
                         if (value !== "on" && value !== "off") {
                             throw new Error(`Received invalid value ${value}`);
                         }
-                        const result = await this.robot.rosFacade.setAutoCollectEnabled(value);
+                        const result = await this.robot.settingService.setAutoCollectEnabled(value);
                         if (Number(result) !== 0) {
                             throw new Error(`setAutoCollectEnabled failed with result=${result}`);
                         }
@@ -41,13 +41,13 @@ class EcovacsQuirkFactory {
                     description: "Enable or disable per-room cleaning preferences used by the Ecovacs app.",
                     options: ["on", "off"],
                     getter: async () => {
-                        return await this.robot.rosFacade.getRoomPreferencesEnabled();
+                        return await this.robot.settingService.getRoomPreferencesEnabled();
                     },
                     setter: async (value) => {
                         if (value !== "on" && value !== "off") {
                             throw new Error(`Received invalid value ${value}`);
                         }
-                        const result = await this.robot.rosFacade.setRoomPreferencesEnabled(value);
+                        const result = await this.robot.settingService.setRoomPreferencesEnabled(value);
                         if (Number(result) !== 0) {
                             throw new Error(`setRoomPreferencesEnabled failed with result=${result}`);
                         }

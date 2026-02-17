@@ -22,7 +22,7 @@ class EcovacsZoneCleaningCapability extends ZoneCleaningCapability {
             return this.robot.mapZoneToWorldRect(zone);
         });
 
-        await this.robot.rosFacade.startCustomClean(rects);
+        await this.robot.workManageService.startCustomClean(rects);
     }
 
     /**

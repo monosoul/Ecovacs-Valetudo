@@ -1,6 +1,15 @@
 const capabilities = require("./capabilities");
+const EcovacsLifespanService = require("./ros/services/EcovacsLifespanService");
+const EcovacsMapService = require("./ros/services/EcovacsMapService");
+const EcovacsPositionService = require("./ros/services/EcovacsPositionService");
 const EcovacsQuirkFactory = require("./EcovacsQuirkFactory");
-const EcovacsRosFacade = require("./ros/services/EcovacsRosFacade");
+const EcovacsRuntimeStateService = require("./ros/services/EcovacsRuntimeStateService");
+const EcovacsSettingService = require("./ros/services/EcovacsSettingService");
+const EcovacsSpotAreaService = require("./ros/services/EcovacsSpotAreaService");
+const EcovacsStatisticsService = require("./ros/services/EcovacsStatisticsService");
+const EcovacsTraceService = require("./ros/services/EcovacsTraceService");
+const EcovacsVirtualWallService = require("./ros/services/EcovacsVirtualWallService");
+const EcovacsWorkManageService = require("./ros/services/EcovacsWorkManageService");
 const entities = require("../../entities");
 const fs = require("fs");
 const Logger = require("../../Logger");
@@ -8,6 +17,7 @@ const lzma = require("lzma-purejs");
 const mapEntities = require("../../entities/map");
 const MdsctlClient = require("./ros/services/MdsctlClient");
 const QuirksCapability = require("../../core/capabilities/QuirksCapability");
+const RosMasterXmlRpcClient = require("./ros/core/RosMasterXmlRpcClient");
 const ValetudoRobot = require("../../core/ValetudoRobot");
 const ValetudoRobotError = require("../../entities/core/ValetudoRobotError");
 const {ALERT_TYPE} = require("./ros/core/TopicStateSubscriber");
@@ -91,14 +101,28 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.cachedRoomCleaningPreferences = {};
         this.activeMapId = null;
         this.tracePathWarningShown = false;
-        this.rosFacade = new EcovacsRosFacade({
-            masterUri: implementationSpecificConfig.rosMasterUri,
-            callerId: implementationSpecificConfig.rosCallerId,
+        const masterClient = new RosMasterXmlRpcClient({
+            masterUri: implementationSpecificConfig.rosMasterUri ?? process.env.ROS_MASTER_URI ?? "http://127.0.0.1:11311",
+            timeoutMs: implementationSpecificConfig.rosConnectTimeoutMs ?? 4_000
+        });
+        const rosOptions = {
+            masterClient: masterClient,
+            callerId: implementationSpecificConfig.rosCallerId ?? process.env.ROS_CALLER_ID ?? "/ROSNODE",
             connectTimeoutMs: implementationSpecificConfig.rosConnectTimeoutMs ?? 4_000,
             callTimeoutMs: implementationSpecificConfig.rosCallTimeoutMs ?? 6_000,
             debug: this.rosDebug,
             onWarn: (msg, err) => Logger.debug(`Ecovacs ROS: ${msg}: ${err ?? ""}`)
-        });
+        };
+        this.mapService = new EcovacsMapService(rosOptions);
+        this.spotAreaService = new EcovacsSpotAreaService(rosOptions);
+        this.virtualWallService = new EcovacsVirtualWallService(rosOptions);
+        this.positionService = new EcovacsPositionService(rosOptions);
+        this.traceService = new EcovacsTraceService(rosOptions);
+        this.workManageService = new EcovacsWorkManageService(rosOptions);
+        this.settingService = new EcovacsSettingService(rosOptions);
+        this.lifespanService = new EcovacsLifespanService(rosOptions);
+        this.statisticsService = new EcovacsStatisticsService(rosOptions);
+        this.runtimeStateService = new EcovacsRuntimeStateService(rosOptions);
         this.mdsctlClient = new MdsctlClient({
             binaryPath: implementationSpecificConfig.mdsctlBinaryPath,
             socketPath: implementationSpecificConfig.mdsctlSocketPath,
@@ -190,11 +214,15 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         super.startup();
         Logger.info("Ecovacs ROS backend mode enabled");
 
-        // Start ROS facade and fetch initial map ID before starting polls
-        void this.rosFacade.startup().then(async () => {
+        // Start ROS services and fetch initial map ID before starting polls
+        void Promise.all([
+            this.positionService.startup(),
+            this.runtimeStateService.startup(),
+            this.statisticsService.startup()
+        ]).then(async () => {
             try {
                 Logger.debug("Ecovacs: fetching initial active map ID");
-                const activeMapId = await this.rosFacade.getActiveMapId();
+                const activeMapId = await this.mapService.getActiveMapId();
                 if (activeMapId !== null) {
                     this.activeMapId = activeMapId;
                     Logger.debug(`Ecovacs: initial active map ID is ${activeMapId}`);
@@ -221,7 +249,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             }, this.cleaningSettingsPollIntervalMs);
             void this.refreshCleaningSettingsState();
         }).catch((e) => {
-            Logger.error("Ecovacs: ROS facade startup failed, timers not started", e);
+            Logger.error("Ecovacs: ROS services startup failed, timers not started", e);
         });
     }
 
@@ -234,7 +262,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         try {
             const requestedMapId = this.getActiveMapId();
             Logger.debug(`Ecovacs map poll: fetching rooms (mapId=${requestedMapId})`);
-            const roomDump = await this.rosFacade.getRooms(requestedMapId);
+            const roomDump = await this.spotAreaService.getRooms(requestedMapId);
 
             // Update activeMapId from the rooms response
             if (Number.isInteger(roomDump?.header?.mapid)) {
@@ -263,7 +291,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
 
             let positions = undefined;
             try {
-                positions = await this.rosFacade.getPositions(mapId);
+                positions = await this.positionService.getPositions(mapId);
                 Logger.debug("Ecovacs map poll: positions fetched");
             } catch (e) {
                 // Positions are optional for this first map integration step.
@@ -271,7 +299,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             }
             let virtualWalls = [];
             try {
-                virtualWalls = await this.rosFacade.getVirtualWalls(mapId);
+                virtualWalls = await this.virtualWallService.getVirtualWalls(mapId);
                 Logger.debug(`Ecovacs map poll: virtual walls fetched (${virtualWalls.length})`);
             } catch (e) {
                 Logger.warn("Ecovacs map poll: virtual walls unavailable", e?.message ?? e);
@@ -310,7 +338,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                     Logger.debug(`Ecovacs map poll: using cached compressed map (${cacheAgeMs}ms old)`);
                 } else {
                     Logger.debug("Ecovacs map poll: fetching compressed map");
-                    const compressedRaw = await this.rosFacade.getCompressedMap(mapId);
+                    const compressedRaw = await this.mapService.getCompressedMap(mapId);
 
                     // Update activeMapId from the compressed map response
                     if (Number.isInteger(compressedRaw?.mapid)) {
@@ -420,43 +448,43 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         let responseCode = null;
         switch (command) {
             case "start":
-                responseCode = await this.rosFacade.startAutoClean();
+                responseCode = await this.workManageService.startAutoClean();
                 break;
             case "stop":
-                responseCode = await this.rosFacade.stopCleaning();
+                responseCode = await this.workManageService.stopCleaning();
                 break;
             case "pause":
-                responseCode = await this.rosFacade.pauseCleaning();
+                responseCode = await this.workManageService.pauseCleaning();
                 break;
             case "resume":
-                responseCode = await this.rosFacade.resumeCleaning();
+                responseCode = await this.workManageService.resumeCleaning();
                 break;
             case "home":
-                responseCode = await this.rosFacade.returnToDock();
+                responseCode = await this.workManageService.returnToDock();
                 break;
             case "empty":
-                responseCode = await this.rosFacade.autoCollectDirt();
+                responseCode = await this.workManageService.autoCollectDirt();
                 break;
             case "room":
-                responseCode = await this.rosFacade.startRoomClean(parseCsvUint8(String(args?.[1] ?? "")));
+                responseCode = await this.workManageService.startRoomClean(parseCsvUint8(String(args?.[1] ?? "")));
                 break;
             case "custom":
-                responseCode = await this.rosFacade.startCustomClean(parseRectArgs(args.slice(1)));
+                responseCode = await this.workManageService.startCustomClean(parseRectArgs(args.slice(1)));
                 break;
             case "remote-forward":
-                responseCode = await this.rosFacade.remoteMove(REMOTE_MOVE_FORWARD);
+                responseCode = await this.workManageService.remoteMove(REMOTE_MOVE_FORWARD);
                 break;
             case "remote-backward":
-                responseCode = await this.rosFacade.remoteMove(REMOTE_MOVE_BACKWARD);
+                responseCode = await this.workManageService.remoteMove(REMOTE_MOVE_BACKWARD);
                 break;
             case "remote-stop":
-                responseCode = await this.rosFacade.remoteMove(REMOTE_MOVE_STOP);
+                responseCode = await this.workManageService.remoteMove(REMOTE_MOVE_STOP);
                 break;
             case "remote-turn-left":
-                responseCode = await this.rosFacade.remoteMove(REMOTE_MOVE_MVA_CUSTOM, -REMOTE_TURN_W);
+                responseCode = await this.workManageService.remoteMove(REMOTE_MOVE_MVA_CUSTOM, -REMOTE_TURN_W);
                 break;
             case "remote-turn-right":
-                responseCode = await this.rosFacade.remoteMove(REMOTE_MOVE_MVA_CUSTOM, REMOTE_TURN_W);
+                responseCode = await this.workManageService.remoteMove(REMOTE_MOVE_MVA_CUSTOM, REMOTE_TURN_W);
                 break;
             case "remote-session-open":
                 await this.remoteSessionOpen(String(args?.[1] ?? ""));
@@ -502,9 +530,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         if (action === "get") {
             let value;
             if (setting === "room_preferences") {
-                value = await this.rosFacade.getRoomPreferencesEnabled();
+                value = await this.settingService.getRoomPreferencesEnabled();
             } else {
-                value = await this.rosFacade.getSuctionBoostOnCarpet();
+                value = await this.settingService.getSuctionBoostOnCarpet();
             }
 
             return {
@@ -518,9 +546,9 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 throw new Error(`Invalid value for ${setting}: ${onOff}`);
             }
             if (setting === "room_preferences") {
-                await this.rosFacade.setRoomPreferencesEnabled(onOff);
+                await this.settingService.setRoomPreferencesEnabled(onOff);
             } else {
-                await this.rosFacade.setSuctionBoostOnCarpet(onOff);
+                await this.settingService.setSuctionBoostOnCarpet(onOff);
             }
 
             return {
@@ -604,10 +632,10 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         const intervalMs = 200;
         const deadline = Date.now() + durationMs;
         while (Date.now() < deadline) {
-            await this.rosFacade.remoteMove(moveType, w);
+            await this.workManageService.remoteMove(moveType, w);
             await delay(intervalMs);
         }
-        await this.rosFacade.remoteMove(REMOTE_MOVE_STOP);
+        await this.workManageService.remoteMove(REMOTE_MOVE_STOP);
     }
 
     async shutdown() {
@@ -629,7 +657,18 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         }
         this.flushRuntimeStateCache();
 
-        await this.rosFacade.shutdown();
+        await Promise.all([
+            this.mapService.shutdown(),
+            this.spotAreaService.shutdown(),
+            this.virtualWallService.shutdown(),
+            this.positionService.shutdown(),
+            this.traceService.shutdown(),
+            this.workManageService.shutdown(),
+            this.settingService.shutdown(),
+            this.lifespanService.shutdown(),
+            this.statisticsService.shutdown(),
+            this.runtimeStateService.shutdown()
+        ]);
     }
 
     /**
@@ -1072,7 +1111,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
 
         this.livePositionPollInFlight = true;
         try {
-            const positions = await this.rosFacade.getPositions(this.getActiveMapId());
+            const positions = await this.positionService.getPositions(this.getActiveMapId());
             this.updateRobotPoseFromPositions(positions);
             if (this.tracePathEnabled) {
                 try {
@@ -1115,8 +1154,8 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
 
     refreshRuntimeState() {
         try {
-            const workState = this.rosFacade.getRuntimeState()?.workState;
-            const powerState = this.rosFacade.getPowerState();
+            const workState = this.runtimeStateService.getRuntimeState()?.workState;
+            const powerState = this.runtimeStateService.getPowerState();
             const battery = powerState?.battery;
             const chargeState = powerState?.chargeState;
             let stateChanged = false;
@@ -1168,7 +1207,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                 return;
             }
 
-            const triggeredAlerts = this.rosFacade.getTriggeredAlerts();
+            const triggeredAlerts = this.runtimeStateService.getTriggeredAlerts();
             const errorAlert = triggeredAlerts && triggeredAlerts.length > 0 ?
                 findMostSevereErrorAlert(triggeredAlerts) :
                 null;
@@ -1223,8 +1262,8 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
     async refreshCleaningSettingsState() {
         try {
             const [fanRaw, waterLevelRaw] = await Promise.all([
-                this.rosFacade.getFanMode(),
-                this.rosFacade.getWaterLevel()
+                this.settingService.getFanMode(),
+                this.settingService.getWaterLevel()
             ]);
             const fanPreset = fanLevelToPresetValue(fanRaw?.mode, fanRaw?.isSilent);
             const waterPreset = waterLevelToPresetValue(waterLevelRaw);
@@ -1387,7 +1426,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
      */
     async updateTracePathFromService() {
         const mapId = this.getActiveMapId();
-        const trace = await this.rosFacade.getTraceLatest(mapId, this.traceTailEntries);
+        const trace = await this.traceService.getTraceLatest(mapId, this.traceTailEntries);
         if (trace === null) {
             // The trace service signals a reset (endIdx=0 or 0xFFFFFFFF).
             // Clear stale state so the next real endIdx is accepted.

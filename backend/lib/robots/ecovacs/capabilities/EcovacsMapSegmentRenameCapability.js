@@ -31,7 +31,7 @@ class EcovacsMapSegmentRenameCapability extends MapSegmentRenameCapability {
             `currentSegments=[${currentSegments.map(s => `{id=${s.id},name=${s.name}}`).join(", ")}]`
         );
 
-        const response = await this.robot.rosFacade.setRoomLabel(mapId, roomId, labelId);
+        const response = await this.robot.spotAreaService.setRoomLabel(mapId, roomId, labelId);
         Logger.debug(`MapSegmentRename: response=${JSON.stringify(response)}`);
         if (Number(response?.result) !== 0) {
             throw new Error(`setRoomLabel failed with result=${response?.result}`);

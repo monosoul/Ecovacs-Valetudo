@@ -16,11 +16,11 @@ class EcovacsCurrentStatisticsCapability extends CurrentStatisticsCapability {
      */
     async getStatistics() {
         // Try the topic subscriber cache first (no RPC round-trip)
-        let stats = this.robot.rosFacade.getWorkStatistic(Infinity);
+        let stats = this.robot.statisticsService.getWorkStatistic(Infinity);
 
         // Fall back to the service call if the topic hasn't published yet
         if (stats === null) {
-            stats = await this.robot.rosFacade.getLastCleanStatistics();
+            stats = await this.robot.statisticsService.getLastCleanStatistics();
         }
 
         return [

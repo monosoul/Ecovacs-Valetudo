@@ -8,7 +8,7 @@ class EcovacsCleanRouteControlCapability extends CleanRouteControlCapability {
      * @returns {Promise<import("../../../core/capabilities/CleanRouteControlCapability").CleanRouteControlCapabilityRoute>}
      */
     async getRoute() {
-        const passes = Number(await this.robot.rosFacade.getCleaningTimesPasses());
+        const passes = Number(await this.robot.settingService.getCleaningTimesPasses());
 
         return passes >= 2 ?
             CleanRouteControlCapability.ROUTE.DEEP :
@@ -21,7 +21,7 @@ class EcovacsCleanRouteControlCapability extends CleanRouteControlCapability {
      */
     async setRoute(newRoute) {
         const passes = routeToPasses(newRoute);
-        const result = await this.robot.rosFacade.setCleaningTimesPasses(passes);
+        const result = await this.robot.settingService.setCleaningTimesPasses(passes);
         if (Number(result) !== 0) {
             throw new Error(`setCleaningTimesPasses failed with result=${result}`);
         }
