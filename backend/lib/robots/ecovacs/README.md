@@ -152,18 +152,19 @@ Note: `SettingManage` request uses two trailing padding bytes to match device be
 
 ### Per-Room Cleaning Preferences
 
-Read via `ManipulateSpotArea` GET response (preferences are embedded in the
-metadata gap after each room's polygon data). Written via `ManipulateSpotArea`
-SET with `type=4` (17-byte header + 30-byte room block per room).
+Read via `ManipulateSpotArea` GET response (preferences are part of each room's
+sequential wire format -- see [SpotArea GET wire format](#spotarea-get-wire-format)
+below). Written via `ManipulateSpotArea` SET with `type=4` (17-byte header +
+30-byte room block per room).
 
 Per-room settings: suction power, water level, cleaning times.
 
 ### Room Cleaning Order
 
-Read via `ManipulateSpotArea` GET response (sequence position is a `u8` byte
-in the room metadata gap, immediately after the cleaning preferences). Written
-via `ManipulateSpotArea` SET with `type=5` (17-byte header + 30-byte room block
-per room, with `areaid` at byte 0 and `sequence_position` at byte 29).
+Read via `ManipulateSpotArea` GET response (`sequencePosition` is a `u8` field
+at the end of each room block). Written via `ManipulateSpotArea` SET with
+`type=5` (17-byte header + 30-byte room block per room, with `areaid` at byte 0
+and `sequence_position` at byte 29).
 
 ### Virtual Restrictions
 
@@ -196,25 +197,44 @@ Each room in the firmware has a unique `areaid` (u32). This value is used as
 Valetudo's `segmentId` — it appears in the UI, in API requests (rename, clean,
 merge, split, preferences), and in map layers.
 
-The `areaid` is extracted from the `GET_SPOTAREAS` binary response by the
-deterministic polygon parser in `EcovacsSpotAreaService.js`. The room block layout
-before each polygon is:
-
-```
-areaid(u32) + name_len(u32) + name(bytes) + label_id(u8) + point_count(u32) + polygon...
-```
-
-On this firmware `name_len` is always 0 (room names are stored as label enum
-IDs, not strings), so the `areaid` sits at a fixed offset of **9 bytes before
-`point_count`**. The parser derives it from the polygon position rather than
-from a sequential cursor, because the cursor only advances to end-of-polygon
-and does not skip past post-polygon data (connections + preferences). Reading
-at the cursor for rooms after the first would incorrectly read the previous
-room's `connections_count` instead of the real `areaid`.
-
 After merge or split operations the firmware reassigns `areaid`s — it may
 recycle previously released values or allocate new ones. Valetudo re-reads
 rooms after these operations to pick up the new identifiers.
+
+### SpotArea GET wire format
+
+The `ManipulateSpotArea` GET response is parsed deterministically by
+`parseSpotAreaGetResponse` in `EcovacsSpotAreaService.js` using sequential
+`BinaryCursor` reads. The full wire format:
+
+**Header (13 bytes):**
+
+```
+u8   result
+u32  mapid
+u32  areasId
+u32  areaCount
+```
+
+**Per room (repeated `areaCount` times):**
+
+```
+u32  areaid
+u32  nameLen
+u8[nameLen]  name          (always 0 on this firmware; names use label IDs)
+u8   labelId
+u32  pointCount
+(f32 x, f32 y)[pointCount]  polygon vertices
+u32  connCount
+u32[connCount]  connections  (areaid of connected/adjacent rooms)
+u32  suctionPower
+u32  waterLevel
+u32  cleaningTimes
+u8   sequencePosition
+```
+
+On the T8 AIVI firmware, `nameLen` is always 0 — room names are stored as
+numeric `labelId` values mapped to human-readable names in `RoomLabels.js`.
 
 ## Adding New Features
 
