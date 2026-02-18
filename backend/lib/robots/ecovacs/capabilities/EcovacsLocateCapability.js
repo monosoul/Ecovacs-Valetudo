@@ -5,7 +5,7 @@ const LocateCapability = require("../../../core/capabilities/LocateCapability");
  */
 class EcovacsLocateCapability extends LocateCapability {
     async locate() {
-        await this.robot.runSoundCommand(["locate"]);
+        await this.robot.soundService.playLocateSound();
     }
 }
 

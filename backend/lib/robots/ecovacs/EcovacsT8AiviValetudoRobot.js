@@ -3,9 +3,11 @@ const EcovacsLifespanService = require("./ros/services/EcovacsLifespanService");
 const EcovacsMapService = require("./ros/services/EcovacsMapService");
 const EcovacsPositionService = require("./ros/services/EcovacsPositionService");
 const EcovacsQuirkFactory = require("./EcovacsQuirkFactory");
+const EcovacsRemoteSessionService = require("./ros/services/EcovacsRemoteSessionService");
 const EcovacsRuntimeStateCache = require("./EcovacsRuntimeStateCache");
 const EcovacsRuntimeStateService = require("./ros/services/EcovacsRuntimeStateService");
 const EcovacsSettingService = require("./ros/services/EcovacsSettingService");
+const EcovacsSoundService = require("./ros/services/EcovacsSoundService");
 const EcovacsSpotAreaService = require("./ros/services/EcovacsSpotAreaService");
 const EcovacsStatisticsService = require("./ros/services/EcovacsStatisticsService");
 const EcovacsTraceService = require("./ros/services/EcovacsTraceService");
@@ -20,9 +22,6 @@ const QuirksCapability = require("../../core/capabilities/QuirksCapability");
 const RosMasterXmlRpcClient = require("./ros/core/RosMasterXmlRpcClient");
 const ValetudoRobot = require("../../core/ValetudoRobot");
 const {
-    REMOTE_MOVE_STOP,
-    SOUND_BEEP,
-    SOUND_I_AM_HERE,
     determineRobotStatus,
     fanLevelToPresetValue,
     statusToDockStatus,
@@ -30,7 +29,7 @@ const {
 } = require("./EcovacsStateMapping");
 const {alertTypeName, findMostSevereErrorAlert, mapAlertToRobotError} = require("./EcovacsAlertMapping");
 const {buildMap, rebuildEntitiesOnlyMap} = require("./map/EcovacsMapBuilder");
-const {clampInt, mapCmToWorldMm, worldMmToMapPointCm} = require("./map/EcovacsMapTransforms");
+const {clampInt} = require("./map/EcovacsMapTransforms");
 const {decodeCompressedMapResponse} = require("./map/EcovacsCompressedMapDecoder");
 const {decodeTraceRawHexToWorldMmPoints} = require("./map/EcovacsTraceDecoder");
 const {formatMapStats, getLayerPixelCountByType, getTotalLayerPixelCount, hasChargerEntity, hasRobotEntity} = require("./map/EcovacsMapStats");
@@ -113,6 +112,8 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             socketPath: implementationSpecificConfig.mdsctlSocketPath,
             timeoutMs: implementationSpecificConfig.mdsctlTimeoutMs ?? 2_000
         });
+        this.remoteSessionService = new EcovacsRemoteSessionService({mdsctlClient: this.mdsctlClient});
+        this.soundService = new EcovacsSoundService({mdsctlClient: this.mdsctlClient});
 
         this.state.upsertFirstMatchingAttribute(new stateAttrs.DockStatusStateAttribute({
             value: stateAttrs.DockStatusStateAttribute.VALUE.IDLE
@@ -375,138 +376,6 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.emitStateAttributesUpdated();
     }
 
-    getManualControlSessionCode() {
-        if (this.manualControlSessionCode === undefined || this.manualControlSessionCode === null || this.manualControlSessionCode === "") {
-            throw new Error(
-                "Missing robot.implementationSpecificConfig.manualControlSessionCode for Ecovacs manual control session setup."
-            );
-        }
-
-        return this.manualControlSessionCode;
-    }
-
-    /**
-     * @param {Array<string>} args
-     * @returns {Promise<{stdout: string, stderr: string}>}
-     */
-    async runSettingsCommand(args) {
-        const action = String(args?.[0] ?? "").toLowerCase();
-        const setting = String(args?.[1] ?? "").toLowerCase();
-        if (!["suction_boost_on_carpet", "carpet_boost", "room_preferences"].includes(setting)) {
-            throw new Error(`Unsupported setting command: ${action} ${setting}`);
-        }
-
-        if (action === "get") {
-            let value;
-            if (setting === "room_preferences") {
-                value = await this.settingService.getRoomPreferencesEnabled();
-            } else {
-                value = await this.settingService.getSuctionBoostOnCarpet();
-            }
-
-            return {
-                stdout: `${setting}: ${value}`,
-                stderr: ""
-            };
-        }
-        if (action === "set") {
-            const onOff = String(args?.[2] ?? "").toLowerCase();
-            if (!["on", "off"].includes(onOff)) {
-                throw new Error(`Invalid value for ${setting}: ${onOff}`);
-            }
-            if (setting === "room_preferences") {
-                await this.settingService.setRoomPreferencesEnabled(onOff);
-            } else {
-                await this.settingService.setSuctionBoostOnCarpet(onOff);
-            }
-
-            return {
-                stdout: `Set ${setting}: ${onOff}`,
-                stderr: ""
-            };
-        }
-
-        throw new Error(`Unsupported settings action: ${action}`);
-    }
-
-    /**
-     * @param {Array<string>} args
-     * @returns {Promise<{stdout: string, stderr: string}>}
-     */
-    async runSoundCommand(args) {
-        const command = String(args?.[0] ?? "").toLowerCase();
-        let fileNumber = null;
-        if (command === "locate") {
-            fileNumber = SOUND_I_AM_HERE;
-        } else if (command === "beep") {
-            fileNumber = SOUND_BEEP;
-        } else if (command === "play-sound") {
-            fileNumber = Number(args?.[1]);
-            if (!Number.isFinite(fileNumber)) {
-                throw new Error(`Invalid play-sound file number: ${args?.[1]}`);
-            }
-        } else {
-            throw new Error(`Unsupported sound command: ${command}`);
-        }
-
-        await this.mdsctlClient.send("audio0", {
-            todo: "audio",
-            cmd: "play",
-            file_number: Math.trunc(fileNumber)
-        });
-
-        return {stdout: "", stderr: ""};
-    }
-
-    /**
-     * @param {string} code
-     * @returns {Promise<void>}
-     */
-    async remoteSessionOpen(code) {
-        if (!code) {
-            throw new Error("remote-session-open requires a non-empty code");
-        }
-        await this.mdsctlClient.send("live_pwd", {
-            todo: "setPwdState",
-            state: 1
-        });
-        await this.mdsctlClient.send("live_pwd", {
-            todo: "onLiveLaunchPwdState",
-            state: 1,
-            password: String(code)
-        });
-        await this.mdsctlClient.send("rosnode", {
-            todo: "start_push_stream",
-            light_state: 1
-        });
-    }
-
-    /**
-     * @returns {Promise<void>}
-     */
-    async remoteSessionClose() {
-        await this.mdsctlClient.send("rosnode", {
-            todo: "stop_push_stream"
-        });
-    }
-
-    /**
-     * @param {number} moveType
-     * @param {number} w
-     * @param {number} durationSec
-     * @returns {Promise<void>}
-     */
-    async remoteHold(moveType, w, durationSec) {
-        const durationMs = Math.max(0, Number(durationSec) * 1000);
-        const intervalMs = 200;
-        const deadline = Date.now() + durationMs;
-        while (Date.now() < deadline) {
-            await this.workManageService.remoteMove(moveType, w);
-            await delay(intervalMs);
-        }
-        await this.workManageService.remoteMove(REMOTE_MOVE_STOP);
-    }
-
     async shutdown() {
         if (this.livePositionPollTimer) {
             clearInterval(this.livePositionPollTimer);
@@ -534,70 +403,6 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             this.statisticsService.shutdown(),
             this.runtimeStateService.shutdown()
         ]);
-    }
-
-    /**
-     * @param {import("../../entities/core/ValetudoZone")} zone
-     * @returns {[number,number,number,number]}
-     */
-    mapZoneToWorldRect(zone) {
-        const transform = this.state?.map?.metaData?.ecovacsTransform;
-        const pixelSizeCm = Number(this.state?.map?.pixelSize ?? 0);
-        if (!transform || !Number.isFinite(pixelSizeCm) || pixelSizeCm <= 0) {
-            throw new Error("Map transform is not available for custom area cleaning");
-        }
-        const points = [zone.points?.pA, zone.points?.pB, zone.points?.pC, zone.points?.pD]
-            .filter(Boolean)
-            .map(point => {
-                return mapCmToWorldMm(transform, Number(point.x), Number(point.y), pixelSizeCm);
-            })
-            .filter(Boolean);
-        if (points.length === 0) {
-            throw new Error("Invalid zone points");
-        }
-        const xs = points.map(point => point.x);
-        const ys = points.map(point => point.y);
-
-        return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
-    }
-
-    /**
-     * @param {{x:number,y:number}} point
-     * @returns {{x:number,y:number}}
-     */
-    mapPointToWorld(point) {
-        const transform = this.state?.map?.metaData?.ecovacsTransform;
-        const pixelSizeCm = Number(this.state?.map?.pixelSize ?? 0);
-        if (!transform || !Number.isFinite(pixelSizeCm) || pixelSizeCm <= 0) {
-            throw new Error("Map transform is not available for virtual restrictions");
-        }
-        const world = mapCmToWorldMm(transform, Number(point?.x), Number(point?.y), pixelSizeCm);
-        if (!world) {
-            throw new Error("Invalid map point for virtual restrictions");
-        }
-
-        return world;
-    }
-
-    /**
-     * @param {{x:number,y:number}} point
-     * @returns {{x:number,y:number}|null}
-     */
-    worldPointToMap(point) {
-        const transform = this.state?.map?.metaData?.ecovacsTransform;
-        const pixelSizeCm = Number(this.state?.map?.pixelSize ?? 0);
-        if (!transform || !Number.isFinite(pixelSizeCm) || pixelSizeCm <= 0) {
-            return null;
-        }
-        const mapped = worldMmToMapPointCm(transform, Number(point?.x), Number(point?.y), pixelSizeCm);
-        if (!mapped || mapped.length < 2) {
-            return null;
-        }
-
-        return {
-            x: mapped[0],
-            y: mapped[1]
-        };
     }
 
     /**
@@ -894,14 +699,6 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             fs.existsSync("/usr/lib/python2.7/site-packages/task") &&
             fs.existsSync("/usr/lib/python2.7/site-packages/setting");
     }
-}
-
-/**
- * @param {number} ms
- * @returns {Promise<void>}
- */
-function delay(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 module.exports = EcovacsT8AiviValetudoRobot;

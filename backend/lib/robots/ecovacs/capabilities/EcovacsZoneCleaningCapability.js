@@ -1,4 +1,5 @@
 const ZoneCleaningCapability = require("../../../core/capabilities/ZoneCleaningCapability");
+const {mapZoneToWorldRect} = require("../map/EcovacsMapTransforms");
 
 /**
  * @extends ZoneCleaningCapability<import("../EcovacsT8AiviValetudoRobot")>
@@ -19,7 +20,7 @@ class EcovacsZoneCleaningCapability extends ZoneCleaningCapability {
         }
 
         const rects = options.zones.map(zone => {
-            return this.robot.mapZoneToWorldRect(zone);
+            return mapZoneToWorldRect(this.robot.state.map, zone);
         });
 
         await this.robot.workManageService.startCustomClean(rects);

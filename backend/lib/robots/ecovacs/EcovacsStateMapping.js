@@ -7,8 +7,6 @@ const REMOTE_MOVE_FORWARD = 0;
 const REMOTE_MOVE_BACKWARD = 1;
 const REMOTE_MOVE_STOP = 2;
 const REMOTE_TURN_W = 87;
-const SOUND_I_AM_HERE = 30;
-const SOUND_BEEP = 17;
 
 const WORK_STATE = {
     IDLE: 0,
@@ -161,8 +159,6 @@ module.exports = {
     REMOTE_MOVE_MVA_CUSTOM: REMOTE_MOVE_MVA_CUSTOM,
     REMOTE_MOVE_STOP: REMOTE_MOVE_STOP,
     REMOTE_TURN_W: REMOTE_TURN_W,
-    SOUND_BEEP: SOUND_BEEP,
-    SOUND_I_AM_HERE: SOUND_I_AM_HERE,
     WORK_STATE: WORK_STATE,
     WORK_TYPE: WORK_TYPE,
     determineRobotStatus: determineRobotStatus,

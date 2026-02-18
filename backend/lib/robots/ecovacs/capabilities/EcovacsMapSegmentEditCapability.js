@@ -1,4 +1,5 @@
 const MapSegmentEditCapability = require("../../../core/capabilities/MapSegmentEditCapability");
+const {mapPointToWorld} = require("../map/EcovacsMapTransforms");
 
 /**
  * @extends MapSegmentEditCapability<import("../EcovacsT8AiviValetudoRobot")>
@@ -32,8 +33,8 @@ class EcovacsMapSegmentEditCapability extends MapSegmentEditCapability {
     async splitSegment(segment, pA, pB) {
         const mapId = requireActiveMapId(this.robot.getActiveMapId());
         const roomId = parseRoomId(segment.id);
-        const worldA = this.robot.mapPointToWorld(pA);
-        const worldB = this.robot.mapPointToWorld(pB);
+        const worldA = mapPointToWorld(this.robot.state.map, pA);
+        const worldB = mapPointToWorld(this.robot.state.map, pB);
 
         const response = await this.robot.spotAreaService.splitRoom(mapId, roomId, [
             Number(worldA.x),

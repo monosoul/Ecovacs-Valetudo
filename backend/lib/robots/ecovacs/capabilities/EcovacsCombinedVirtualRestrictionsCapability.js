@@ -3,6 +3,7 @@ const Logger = require("../../../Logger");
 const ValetudoRestrictedZone = require("../../../entities/core/ValetudoRestrictedZone");
 const ValetudoVirtualRestrictions = require("../../../entities/core/ValetudoVirtualRestrictions");
 const ValetudoVirtualWall = require("../../../entities/core/ValetudoVirtualWall");
+const {mapPointToWorld, mapZoneToWorldRect, worldPointToMap} = require("../map/EcovacsMapTransforms");
 
 /**
  * @extends CombinedVirtualRestrictionsCapability<import("../EcovacsT8AiviValetudoRobot")>
@@ -29,7 +30,7 @@ class EcovacsCombinedVirtualRestrictionsCapability extends CombinedVirtualRestri
         for (const wall of walls) {
             const dots = Array.isArray(wall.dots) ? wall.dots : [];
             const mapped = dots.map(dot => {
-                return this.robot.worldPointToMap({x: Number(dot[0]), y: Number(dot[1])});
+                return worldPointToMap(this.robot.state.map, {x: Number(dot[0]), y: Number(dot[1])});
             }).filter(point => {
                 return point && Number.isFinite(point.x) && Number.isFinite(point.y);
             });
@@ -96,15 +97,15 @@ class EcovacsCombinedVirtualRestrictionsCapability extends CombinedVirtualRestri
 
         let nextId = 1;
         for (const lineWall of lineWalls) {
-            const pA = this.robot.mapPointToWorld(lineWall.points.pA);
-            const pB = this.robot.mapPointToWorld(lineWall.points.pB);
+            const pA = mapPointToWorld(this.robot.state.map, lineWall.points.pA);
+            const pB = mapPointToWorld(this.robot.state.map, lineWall.points.pB);
             const result = await this.robot.virtualWallService.addVirtualWallPoints(
                 mapId, nextId++, 0, [[pA.x, pA.y], [pB.x, pB.y]]
             );
             ensureResultOk("addVirtualWall", result);
         }
         for (const zone of restrictedZones) {
-            const rect = this.robot.mapZoneToWorldRect(zone);
+            const rect = mapZoneToWorldRect(this.robot.state.map, zone);
             if (zone.type === ValetudoRestrictedZone.TYPE.MOP) {
                 const result = await this.robot.virtualWallService.addNoMopZone(mapId, nextId++, rect);
                 ensureResultOk("addNoMopZone", result);
