@@ -20,11 +20,7 @@ const QuirksCapability = require("../../core/capabilities/QuirksCapability");
 const RosMasterXmlRpcClient = require("./ros/core/RosMasterXmlRpcClient");
 const ValetudoRobot = require("../../core/ValetudoRobot");
 const {
-    REMOTE_MOVE_BACKWARD,
-    REMOTE_MOVE_FORWARD,
-    REMOTE_MOVE_MVA_CUSTOM,
     REMOTE_MOVE_STOP,
-    REMOTE_TURN_W,
     SOUND_BEEP,
     SOUND_I_AM_HERE,
     determineRobotStatus,
@@ -387,86 +383,6 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         }
 
         return this.manualControlSessionCode;
-    }
-
-    /**
-     * @param {Array<string>} args
-     * @returns {Promise<{stdout: string, stderr: string}>}
-     */
-    async runStartCleanCommand(args) {
-        const command = String(args?.[0] ?? "").toLowerCase();
-        if (this.rosDebug) {
-            Logger.info(`Ecovacs command start-clean: ${command} args=${JSON.stringify(args ?? [])}`);
-        }
-        let responseCode = null;
-        switch (command) {
-            case "start":
-                responseCode = await this.workManageService.startAutoClean();
-                break;
-            case "stop":
-                responseCode = await this.workManageService.stopCleaning();
-                break;
-            case "pause":
-                responseCode = await this.workManageService.pauseCleaning();
-                break;
-            case "resume":
-                responseCode = await this.workManageService.resumeCleaning();
-                break;
-            case "home":
-                responseCode = await this.workManageService.returnToDock();
-                break;
-            case "empty":
-                responseCode = await this.workManageService.autoCollectDirt();
-                break;
-            case "room":
-                responseCode = await this.workManageService.startRoomClean(parseCsvUint8(String(args?.[1] ?? "")));
-                break;
-            case "custom":
-                responseCode = await this.workManageService.startCustomClean(parseRectArgs(args.slice(1)));
-                break;
-            case "remote-forward":
-                responseCode = await this.workManageService.remoteMove(REMOTE_MOVE_FORWARD);
-                break;
-            case "remote-backward":
-                responseCode = await this.workManageService.remoteMove(REMOTE_MOVE_BACKWARD);
-                break;
-            case "remote-stop":
-                responseCode = await this.workManageService.remoteMove(REMOTE_MOVE_STOP);
-                break;
-            case "remote-turn-left":
-                responseCode = await this.workManageService.remoteMove(REMOTE_MOVE_MVA_CUSTOM, -REMOTE_TURN_W);
-                break;
-            case "remote-turn-right":
-                responseCode = await this.workManageService.remoteMove(REMOTE_MOVE_MVA_CUSTOM, REMOTE_TURN_W);
-                break;
-            case "remote-session-open":
-                await this.remoteSessionOpen(String(args?.[1] ?? ""));
-                break;
-            case "remote-session-close":
-                await this.remoteSessionClose();
-                break;
-            case "remote-hold-forward":
-                await this.remoteHold(REMOTE_MOVE_FORWARD, 0, Number(args?.[1] ?? 1.0));
-                break;
-            case "remote-hold-backward":
-                await this.remoteHold(REMOTE_MOVE_BACKWARD, 0, Number(args?.[1] ?? 1.0));
-                break;
-            case "remote-hold-turn-left":
-                await this.remoteHold(REMOTE_MOVE_MVA_CUSTOM, -REMOTE_TURN_W, Number(args?.[1] ?? 1.0));
-                break;
-            case "remote-hold-turn-right":
-                await this.remoteHold(REMOTE_MOVE_MVA_CUSTOM, REMOTE_TURN_W, Number(args?.[1] ?? 1.0));
-                break;
-            default:
-                throw new Error(`Unsupported start clean command: ${command}`);
-        }
-        if (responseCode !== null) {
-            if (this.rosDebug) {
-                Logger.info(`Ecovacs command result: ${command} response=${responseCode}`);
-            }
-        }
-
-        return {stdout: "", stderr: ""};
     }
 
     /**
@@ -978,46 +894,6 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             fs.existsSync("/usr/lib/python2.7/site-packages/task") &&
             fs.existsSync("/usr/lib/python2.7/site-packages/setting");
     }
-}
-
-/**
- * @param {string} value
- * @returns {Array<number>}
- */
-function parseCsvUint8(value) {
-    const parts = String(value ?? "").split(",").map(item => item.trim()).filter(Boolean);
-    if (parts.length === 0) {
-        throw new Error("Expected at least one comma-separated uint8 value");
-    }
-
-    return parts.map(part => {
-        const parsed = Number(part);
-        if (!Number.isInteger(parsed) || parsed < 0 || parsed > 255) {
-            throw new Error(`Invalid uint8 value: ${part}`);
-        }
-
-        return parsed;
-    });
-}
-
-/**
- * @param {Array<string>} args
- * @returns {Array<[number,number,number,number]>}
- */
-function parseRectArgs(args) {
-    if (args.length < 4 || args.length % 4 !== 0) {
-        throw new Error("custom requires x1 y1 x2 y2 [x1 y1 x2 y2 ...]");
-    }
-    const values = args.map(v => Number(v));
-    if (values.some(v => !Number.isFinite(v))) {
-        throw new Error("custom rectangle values must be numeric");
-    }
-    const out = [];
-    for (let i = 0; i < values.length; i += 4) {
-        out.push([values[i], values[i + 1], values[i + 2], values[i + 3]]);
-    }
-
-    return out;
 }
 
 /**

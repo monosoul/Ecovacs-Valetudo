@@ -1,5 +1,12 @@
 const entities = require("../../../entities");
 const ManualControlCapability = require("../../../core/capabilities/ManualControlCapability");
+const {
+    REMOTE_MOVE_BACKWARD,
+    REMOTE_MOVE_FORWARD,
+    REMOTE_MOVE_MVA_CUSTOM,
+    REMOTE_MOVE_STOP,
+    REMOTE_TURN_W,
+} = require("../EcovacsStateMapping");
 
 const stateAttrs = entities.state.attributes;
 
@@ -24,7 +31,7 @@ class EcovacsManualControlCapability extends ManualControlCapability {
         }
 
         const sessionCode = this.robot.getManualControlSessionCode();
-        await this.robot.runStartCleanCommand(["remote-session-open", String(sessionCode)]);
+        await this.robot.remoteSessionOpen(sessionCode);
 
         this.robot.manualControlActiveFlag = true;
         this.robot.setStatus(stateAttrs.StatusStateAttribute.VALUE.MANUAL_CONTROL);
@@ -36,12 +43,12 @@ class EcovacsManualControlCapability extends ManualControlCapability {
         }
 
         try {
-            await this.robot.runStartCleanCommand(["remote-stop"]);
+            await this.robot.workManageService.remoteMove(REMOTE_MOVE_STOP);
         } catch (e) {
             // Stopping manual control session is more important than stop best-effort
         }
 
-        await this.robot.runStartCleanCommand(["remote-session-close"]);
+        await this.robot.remoteSessionClose();
 
         this.robot.manualControlActiveFlag = false;
         this.robot.setStatus(stateAttrs.StatusStateAttribute.VALUE.IDLE);
@@ -60,25 +67,22 @@ class EcovacsManualControlCapability extends ManualControlCapability {
             throw new Error("Manual control mode is not active.");
         }
 
-        let command;
         switch (movementCommand) {
             case ManualControlCapability.MOVEMENT_COMMAND_TYPE.FORWARD:
-                command = "remote-hold-forward";
+                await this.robot.remoteHold(REMOTE_MOVE_FORWARD, 0, 0.35);
                 break;
             case ManualControlCapability.MOVEMENT_COMMAND_TYPE.BACKWARD:
-                command = "remote-hold-backward";
+                await this.robot.remoteHold(REMOTE_MOVE_BACKWARD, 0, 0.35);
                 break;
             case ManualControlCapability.MOVEMENT_COMMAND_TYPE.ROTATE_CLOCKWISE:
-                command = "remote-hold-turn-right";
+                await this.robot.remoteHold(REMOTE_MOVE_MVA_CUSTOM, REMOTE_TURN_W, 0.35);
                 break;
             case ManualControlCapability.MOVEMENT_COMMAND_TYPE.ROTATE_COUNTERCLOCKWISE:
-                command = "remote-hold-turn-left";
+                await this.robot.remoteHold(REMOTE_MOVE_MVA_CUSTOM, -REMOTE_TURN_W, 0.35);
                 break;
             default:
                 throw new Error("Invalid movementCommand.");
         }
-
-        await this.robot.runStartCleanCommand([command, "0.35"]);
     }
 }
 
