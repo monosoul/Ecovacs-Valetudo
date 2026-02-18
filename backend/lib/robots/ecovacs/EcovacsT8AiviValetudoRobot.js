@@ -57,8 +57,6 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.livePositionCommandTimeoutMs = implementationSpecificConfig.livePositionCommandTimeoutMs ?? 4000;
         this.powerStatePollIntervalMs = implementationSpecificConfig.powerStatePollIntervalMs ?? 3000;
         this.cleaningSettingsPollIntervalMs = implementationSpecificConfig.cleaningSettingsPollIntervalMs ?? 30_000;
-        this.powerStateStaleAfterMs = implementationSpecificConfig.powerStateStaleAfterMs ?? 300_000;
-        this.workStateStaleAfterMs = implementationSpecificConfig.workStateStaleAfterMs ?? 20_000;
         this.tracePathEnabled = implementationSpecificConfig.tracePathEnabled ?? true;
         this.tracePointUnitMm = implementationSpecificConfig.tracePointUnitMm ?? 10;
         this.tracePathMaxPoints = implementationSpecificConfig.tracePathMaxPoints ?? 2000;

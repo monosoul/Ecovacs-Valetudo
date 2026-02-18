@@ -267,8 +267,6 @@ All keys live under `robot.implementationSpecificConfig`.
 | `livePositionCommandTimeoutMs` | `4000` | Timeout for a single live-position poll cycle |
 | `powerStatePollIntervalMs` | `3000` | Battery + charge state topic poll interval |
 | `cleaningSettingsPollIntervalMs` | `30000` | Global cleaning settings refresh interval |
-| `powerStateStaleAfterMs` | `300000` | Consider power state stale after this duration |
-| `workStateStaleAfterMs` | `20000` | Consider work state stale after this duration |
 
 ### Trace path
 
