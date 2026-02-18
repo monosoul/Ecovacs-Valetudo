@@ -11,12 +11,12 @@ const SERVICE = {
     name: "/task/WorkManage"
 };
 
-const WORK_MANAGE_TYPE = {
+const WORK_MANAGE_TYPE = Object.freeze({
     START: 0,
     STOP: 1,
     PAUSE: 2,
     RESUME: 3
-};
+});
 
 class EcovacsWorkManageService {
     /**

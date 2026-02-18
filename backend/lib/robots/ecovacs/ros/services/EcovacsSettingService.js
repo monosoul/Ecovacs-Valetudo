@@ -9,19 +9,19 @@ const SERVICE = {
     name: "/setting/SettingManage"
 };
 
-const SETTING_MANAGE_TYPE = {
+const SETTING_MANAGE_TYPE = Object.freeze({
     GET: 0,
     SET: 1
-};
+});
 
-const SETTING_TYPE = {
+const SETTING_TYPE = Object.freeze({
     AUTO_COLLECT: 13,
     WATER_LEVEL: 6,
     FAN_LEVEL: 7,
     ROOM_PREFERENCES: 14,
     CLEANING_TIMES: 15,
     SUCTION_BOOST_ON_CARPET: 8
-};
+});
 
 class EcovacsSettingService {
     /**

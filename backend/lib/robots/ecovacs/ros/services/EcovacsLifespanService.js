@@ -8,17 +8,17 @@ const SERVICE = {
     name: "/lifespan/lifespan"
 };
 
-const LIFESPAN_MANAGE_TYPE = {
+const LIFESPAN_MANAGE_TYPE = Object.freeze({
     GET: 0,
     RESET: 1
-};
+});
 
-const LIFESPAN_PART = {
+const LIFESPAN_PART = Object.freeze({
     MAIN_BRUSH: 0,
     SIDE_BRUSH: 1,
     HEPA: 2,
     ALL: 3
-};
+});
 
 class EcovacsLifespanService {
     /**

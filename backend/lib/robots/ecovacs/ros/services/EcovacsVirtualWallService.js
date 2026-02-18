@@ -9,17 +9,17 @@ const SERVICE = {
     name: "/map/ManipulateVirtualWall"
 };
 
-const VIRTUAL_WALL_TYPE = {
+const VIRTUAL_WALL_TYPE = Object.freeze({
     NORMAL: 0,
     CARPET: 1
-};
+});
 
-const VIRTUAL_WALL_MANIPULATE_TYPE = {
+const VIRTUAL_WALL_MANIPULATE_TYPE = Object.freeze({
     ADD: 0,
     DELETE: 1,
     GET_ALL: 4,
     GET_BY_ID: 5
-};
+});
 
 class EcovacsVirtualWallService {
     /**

@@ -8,13 +8,13 @@ const REMOTE_MOVE_BACKWARD = 1;
 const REMOTE_MOVE_STOP = 2;
 const REMOTE_TURN_W = 87;
 
-const WORK_STATE = {
+const WORK_STATE = Object.freeze({
     IDLE: 0,
     RUNNING: 1,
     PAUSED: 2
-};
+});
 
-const WORK_TYPE = {
+const WORK_TYPE = Object.freeze({
     AUTO_CLEAN: 0,
     AREA_CLEAN: 1,
     CUSTOM_CLEAN: 2,
@@ -23,7 +23,7 @@ const WORK_TYPE = {
     IDLE: 7,
     REMOTE_CONTROL: 9,
     AUTO_COLLECT_DIRT: 13
-};
+});
 
 /**
  * @param {{worktype:number,state:number,workcause:number}|null|undefined} workState
