@@ -4,6 +4,7 @@ const BinaryCursor = require("../protocol/BinaryCursor");
 const Logger = require("../../../../Logger");
 const PersistentServiceClient = require("../core/PersistentServiceClient");
 const {encodeUInt8Array, encodeUInt32, encodeFloat32} = require("../protocol/encoding");
+const {WORK_TYPE} = require("../../EcovacsStateMapping");
 
 const SERVICE = {
     md5: "07877d0b6f69402fce5b6b91983c66f7",
@@ -15,16 +16,6 @@ const WORK_MANAGE_TYPE = {
     STOP: 1,
     PAUSE: 2,
     RESUME: 3
-};
-
-const WORK_TYPE = {
-    AUTO_CLEAN: 0,
-    AREA_CLEAN: 1,
-    CUSTOM_CLEAN: 2,
-    RETURN: 5,
-    IDLE: 7,
-    REMOTE_CONTROL: 9,
-    AUTO_COLLECT_DIRT: 13
 };
 
 class EcovacsWorkManageService {
@@ -79,25 +70,27 @@ class EcovacsWorkManageService {
     }
 
     /**
+     * @param {number|null} [workType]
      * @returns {Promise<number>}
      */
-    async pauseCleaning() {
+    async pauseCleaning(workType) {
         return await this.callWorkManage(
             serializeWorkManageRequest({
                 manageType: WORK_MANAGE_TYPE.PAUSE,
-                workType: WORK_TYPE.AUTO_CLEAN
+                workType: workType ?? WORK_TYPE.AUTO_CLEAN
             })
         );
     }
 
     /**
+     * @param {number|null} [workType]
      * @returns {Promise<number>}
      */
-    async resumeCleaning() {
+    async resumeCleaning(workType) {
         return await this.callWorkManage(
             serializeWorkManageRequest({
                 manageType: WORK_MANAGE_TYPE.RESUME,
-                workType: WORK_TYPE.AUTO_CLEAN
+                workType: workType ?? WORK_TYPE.AUTO_CLEAN
             })
         );
     }

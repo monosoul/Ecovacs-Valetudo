@@ -66,6 +66,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.rosDebug = implementationSpecificConfig.rosDebug ?? true;
         this.manualControlSessionCode = implementationSpecificConfig.manualControlSessionCode;
         this.manualControlActiveFlag = false;
+        this.currentWorkType = null;
         this.lastRobotPose = null;
         this.cachedCompressedMap = null;
         this.cachedCompressedMapAt = 0;
@@ -468,6 +469,10 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             const battery = powerState?.battery;
             const chargeState = powerState?.chargeState;
             let stateChanged = false;
+
+            if (workState && typeof workState.worktype === "number") {
+                this.currentWorkType = workState.worktype;
+            }
 
             if (battery && typeof battery.battery === "number") {
                 const level = clampInt(battery.battery, 0, 100);

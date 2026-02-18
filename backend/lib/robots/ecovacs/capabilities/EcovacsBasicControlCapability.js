@@ -10,7 +10,7 @@ class EcovacsBasicControlCapability extends BasicControlCapability {
     async start() {
         const currentStatus = this.robot.state.getFirstMatchingAttributeByConstructor(stateAttrs.StatusStateAttribute);
         if (currentStatus?.value === stateAttrs.StatusStateAttribute.VALUE.PAUSED) {
-            await this.robot.workManageService.resumeCleaning();
+            await this.robot.workManageService.resumeCleaning(this.robot.currentWorkType);
         } else {
             await this.robot.workManageService.startAutoClean();
         }
@@ -23,7 +23,7 @@ class EcovacsBasicControlCapability extends BasicControlCapability {
     }
 
     async pause() {
-        await this.robot.workManageService.pauseCleaning();
+        await this.robot.workManageService.pauseCleaning(this.robot.currentWorkType);
         this.robot.setStatus(stateAttrs.StatusStateAttribute.VALUE.PAUSED);
     }
 
