@@ -1,5 +1,6 @@
 "use strict";
 
+const BinaryCursor = require("../protocol/BinaryCursor");
 const Logger = require("../../../../Logger");
 const PersistentServiceClient = require("../core/PersistentServiceClient");
 const {encodeUInt32, encodeFloat32} = require("../protocol/encoding");
@@ -44,36 +45,21 @@ class EcovacsSpotAreaService {
      */
     async getRooms(mapId) {
         const body = await this.callSpotAreaGetWithFallback(mapId);
-
-        const header = parseRoomsHeaderOnly(body);
-        const rooms = extractRoomPolygonsDeterministic(body, header.areaCount);
-        const decodedPrefs = extractRoomPreferences(body, rooms);
-        const preferencesByIndex = {};
-        for (const pref of decodedPrefs) {
-            preferencesByIndex[pref.index] = pref;
-        }
+        const parsed = parseSpotAreaGetResponse(body);
 
         return {
-            header: header,
-            rooms: rooms.map(room => {
-                const decoded = preferencesByIndex[room.index]?.decoded;
-
-                return {
-                    index: room.index,
-                    offset: room.offset,
-                    point_count: room.pointCount,
-                    bbox: room.bbox,
-                    polygon: room.polygon,
-                    metadata_prefix_len: room.metadataPrefixLen,
-                    label_id: room.labelId,
-                    label_name: labelNameFromId(room.labelId),
-                    preference_suction: decoded?.suction_power,
-                    preference_water: decoded?.water_level,
-                    preference_times: decoded?.cleaning_times,
-                    preference_sequence: decoded?.sequence_position ?? 0,
-                    preference_connections: decoded?.connections ?? []
-                };
-            })
+            header: parsed.header,
+            rooms: parsed.rooms.map(room => ({
+                index: room.areaid,
+                polygon: room.polygon,
+                label_id: room.labelId,
+                label_name: labelNameFromId(room.labelId),
+                preference_suction: room.suctionPower,
+                preference_water: room.waterLevel,
+                preference_times: room.cleaningTimes,
+                preference_sequence: room.sequencePosition,
+                preference_connections: room.connections
+            }))
         };
     }
 
@@ -136,8 +122,22 @@ class EcovacsSpotAreaService {
      */
     async getRoomCleaningPreferences(mapId) {
         const body = await this.callSpotAreaGetWithFallback(mapId);
+        const parsed = parseSpotAreaGetResponse(body);
 
-        return decodeRoomPreferencesFromGetResponse(body);
+        return {
+            header: parsed.header,
+            rooms: parsed.rooms.map(room => ({
+                index: room.areaid,
+                label_id: room.labelId,
+                decoded: {
+                    suction_power: room.suctionPower,
+                    water_level: room.waterLevel,
+                    cleaning_times: room.cleaningTimes,
+                    sequence_position: room.sequencePosition,
+                    connections: room.connections
+                }
+            }))
+        };
     }
 
     /**
@@ -202,179 +202,76 @@ class EcovacsSpotAreaService {
  * @returns {{result:number,mapid:number,areasId:number,areaCount:number}}
  */
 function parseRoomsHeaderOnly(body) {
-    if (body.length < 13) {
-        throw new Error("SpotArea response too short for header");
-    }
+    const cursor = new BinaryCursor(body);
 
     return {
-        result: body.readUInt8(0),
-        mapid: body.readUInt32LE(1),
-        areasId: body.readUInt32LE(5),
-        areaCount: body.readUInt32LE(9)
+        result: cursor.readUInt8(),
+        mapid: cursor.readUInt32LE(),
+        areasId: cursor.readUInt32LE(),
+        areaCount: cursor.readUInt32LE()
     };
 }
 
 /**
+ * Deterministic parser for the SpotArea GET response.
+ *
+ * Wire format per room:
+ *   u32 areaid, u32 nameLen, u8[nameLen] name, u8 labelId,
+ *   u32 pointCount, (f32 x, f32 y)[pointCount],
+ *   u32 connCount, u32[connCount] connections,
+ *   u32 suctionPower, u32 waterLevel, u32 cleaningTimes, u8 sequencePosition
+ *
  * @param {Buffer} body
- * @param {number} areaCount
- * @returns {Array<{index:number,offset:number,pointCount:number,bbox:Array<number>,polygon:Array<[number,number]>,metadataPrefixLen:number,labelId:number}>}
+ * @returns {{header:{result:number,mapid:number,areasId:number,areaCount:number},rooms:Array<{areaid:number,name:string,labelId:number,polygon:Array<[number,number]>,connections:Array<number>,suctionPower:number,waterLevel:number,cleaningTimes:number,sequencePosition:number}>}}
  */
-function extractRoomPolygonsDeterministic(body, areaCount) {
+function parseSpotAreaGetResponse(body) {
+    const cursor = new BinaryCursor(body);
+
+    const header = {
+        result: cursor.readUInt8(),
+        mapid: cursor.readUInt32LE(),
+        areasId: cursor.readUInt32LE(),
+        areaCount: cursor.readUInt32LE()
+    };
+
     const rooms = [];
-    let cursor = 13;
+    for (let i = 0; i < header.areaCount; i++) {
+        const areaid = cursor.readUInt32LE();
 
-    for (let idx = 0; idx < areaCount; idx++) {
-        let found = null;
-        for (let off = cursor + 8; off <= body.length - 4; off++) {
-            const z1 = body.readUInt32LE(off - 8);
-            const z2 = body.readUInt32LE(off - 4);
-            if (z1 !== 0 || (z2 & 0x00FFFFFF) !== 0) {
-                continue;
-            }
-            const pointCount = body.readUInt32LE(off);
-            if (pointCount < 3 || pointCount > 256) {
-                continue;
-            }
-            const end = off + 4 + pointCount * 8;
-            if (end > body.length) {
-                continue;
-            }
+        const nameLen = cursor.readUInt32LE();
+        const name = nameLen > 0 ? cursor.readBuffer(nameLen).toString("utf8") : "";
 
-            let plausible = 0;
-            const probe = Math.min(pointCount, 10);
-            for (let i = 0; i < probe; i++) {
-                const x = body.readFloatLE(off + 4 + i * 8);
-                const y = body.readFloatLE(off + 8 + i * 8);
-                if (looksLikeCoord(x) && looksLikeCoord(y)) {
-                    plausible++;
-                }
-            }
-            if (plausible < Math.max(2, Math.min(pointCount, 6) - 2)) {
-                continue;
-            }
+        const labelId = cursor.readUInt8();
 
-            found = {off: off, end: end, pointCount: pointCount};
-            break;
-        }
-        if (!found) {
-            throw new Error(`Room block ${idx} not found from offset ${cursor}`);
-        }
-
-        const areaidOffset = found.off - 9;
-        if (areaidOffset < 0) {
-            throw new Error(`Room block ${idx}: areaid offset ${areaidOffset} is before buffer start`);
-        }
-        const areaid = body.readUInt32LE(areaidOffset);
-
-        const metadata = body.subarray(cursor, found.off);
-        const labelId = metadata.length > 0 ? metadata[metadata.length - 1] : 0;
+        const pointCount = cursor.readUInt32LE();
         const polygon = [];
-        for (let i = 0; i < found.pointCount; i++) {
-            polygon.push([
-                body.readFloatLE(found.off + 4 + i * 8),
-                body.readFloatLE(found.off + 8 + i * 8)
-            ]);
+        for (let j = 0; j < pointCount; j++) {
+            polygon.push([cursor.readFloatLE(), cursor.readFloatLE()]);
         }
-        const xs = polygon.map(point => point[0]);
-        const ys = polygon.map(point => point[1]);
+
+        const connCount = cursor.readUInt32LE();
+        const connections = [];
+        for (let j = 0; j < connCount; j++) {
+            connections.push(cursor.readUInt32LE());
+        }
 
         rooms.push({
-            index: areaid,
-            offset: found.off,
-            pointCount: found.pointCount,
-            bbox: [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)],
+            areaid: areaid,
+            name: name,
+            labelId: labelId,
             polygon: polygon,
-            metadataPrefixLen: found.off - cursor,
-            labelId: labelId
+            connections: connections,
+            suctionPower: cursor.readUInt32LE(),
+            waterLevel: cursor.readUInt32LE(),
+            cleaningTimes: cursor.readUInt32LE(),
+            sequencePosition: cursor.readUInt8()
         });
-        cursor = found.end;
     }
-
-    return rooms;
-}
-
-/**
- * Extract room preferences from a post-polygon gap or tail buffer.
- *
- * @param {Buffer} gapData
- * @returns {{suction_power:number, water_level:number, cleaning_times:number, sequence_position:number, connections:Array<number>}|null}
- */
-function extractPrefsFromGap(gapData) {
-    if (gapData.length < 4) {
-        return null;
-    }
-    const connCount = gapData.readUInt32LE(0);
-    if (connCount > 64) {
-        return null;
-    }
-    const prefOffset = 4 + connCount * 4;
-    if (prefOffset + 12 > gapData.length) {
-        return null;
-    }
-    const suction = gapData.readUInt32LE(prefOffset);
-    const water = gapData.readUInt32LE(prefOffset + 4);
-    const times = gapData.readUInt32LE(prefOffset + 8);
-    const seqOffset = prefOffset + 12;
-    const sequencePosition = seqOffset < gapData.length ? gapData.readUInt8(seqOffset) : 0;
-    const connections = [];
-    for (let i = 0; i < connCount; i++) {
-        connections.push(gapData.readUInt32LE(4 + i * 4));
-    }
-
-    return {
-        suction_power: suction,
-        water_level: water,
-        cleaning_times: times,
-        sequence_position: sequencePosition,
-        connections: connections
-    };
-}
-
-/**
- * @param {Buffer} body
- * @returns {{header:any, rooms:Array<{index:number, label_id:number, decoded:{suction_power:number,water_level:number,cleaning_times:number,connections:Array<number>}|null}>}}
- */
-function decodeRoomPreferencesFromGetResponse(body) {
-    const header = parseRoomsHeaderOnly(body);
-    const rooms = extractRoomPolygonsDeterministic(body, header.areaCount);
 
     return {
         header: header,
-        rooms: extractRoomPreferences(body, rooms)
+        rooms: rooms
     };
-}
-
-/**
- * Extract per-room cleaning preferences from already-parsed rooms.
- *
- * @param {Buffer} body
- * @param {Array<{index:number,offset:number,pointCount:number,metadataPrefixLen:number,labelId:number}>} rooms
- * @returns {Array<{index:number, label_id:number, decoded:{suction_power:number,water_level:number,cleaning_times:number,sequence_position:number,connections:Array<number>}|null}>}
- */
-function extractRoomPreferences(body, rooms) {
-    const rawMetas = rooms.map(room => {
-        const metaStart = room.offset - room.metadataPrefixLen;
-        return body.subarray(metaStart, room.offset);
-    });
-
-    let tailBytes = Buffer.alloc(0);
-    if (rooms.length > 0) {
-        const last = rooms[rooms.length - 1];
-        const tailStart = last.offset + 4 + last.pointCount * 8;
-        tailBytes = body.subarray(tailStart);
-    }
-
-    return rooms.map((room, pos) => {
-        const gap = (pos + 1 < rawMetas.length) ?
-            rawMetas[pos + 1] :
-            tailBytes;
-
-        return {
-            index: room.index,
-            label_id: room.labelId,
-            decoded: extractPrefsFromGap(gap)
-        };
-    });
 }
 
 /**
@@ -485,14 +382,6 @@ function buildRoomSequenceRequest(mapId, sequence) {
     }
 
     return body;
-}
-
-/**
- * @param {number} value
- * @returns {boolean}
- */
-function looksLikeCoord(value) {
-    return Number.isFinite(value) && Math.abs(value) <= 20_000;
 }
 
 module.exports = EcovacsSpotAreaService;

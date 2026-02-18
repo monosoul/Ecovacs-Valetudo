@@ -1,5 +1,6 @@
 "use strict";
 
+const BinaryCursor = require("../protocol/BinaryCursor");
 const PersistentServiceClient = require("../core/PersistentServiceClient");
 const {TopicStateSubscriber, decodeWorkStatisticToWifi} = require("../core/TopicStateSubscriber");
 
@@ -118,14 +119,12 @@ class EcovacsStatisticsService {
  * @returns {{totalCnt:number, totalSecs:number, totalAreaM2:number}}
  */
 function parseGetLogInfoResponse(body) {
-    if (body.length < 12) {
-        throw new Error(`GetLogInfo response too short: ${body.length} bytes`);
-    }
+    const cursor = new BinaryCursor(body);
 
     return {
-        totalCnt: body.readUInt32LE(0),
-        totalSecs: body.readUInt32LE(4),
-        totalAreaM2: body.readUInt32LE(8)
+        totalCnt: cursor.readUInt32LE(),
+        totalSecs: cursor.readUInt32LE(),
+        totalAreaM2: cursor.readUInt32LE()
     };
 }
 
@@ -134,30 +133,15 @@ function parseGetLogInfoResponse(body) {
  * @returns {{worktype:number, worktime:number, workareaM2:number, extraAreaM2:number, waterboxType:number, startTimeSecs:number}}
  */
 function parseGetLastLogInfoResponse(body) {
-    if (body.length < 30) {
-        throw new Error(`GetLastLogInfo response too short: ${body.length} bytes`);
-    }
-
-    let offset = 0;
-    const worktype = body.readUInt8(offset);
-    offset += 1;
-    const worktime = body.readUInt32LE(offset);
-    offset += 4;
-    const workarea = body.readUInt32LE(offset);
-    offset += 4;
-    const extraArea = body.readUInt32LE(offset);
-    offset += 4;
-    const waterboxType = body.readUInt8(offset);
-    offset += 1;
-    const startTimeSecs = body.readUInt32LE(offset);
+    const cursor = new BinaryCursor(body);
 
     return {
-        worktype: worktype,
-        worktime: worktime,
-        workareaM2: workarea,
-        extraAreaM2: extraArea,
-        waterboxType: waterboxType,
-        startTimeSecs: startTimeSecs
+        worktype: cursor.readUInt8(),
+        worktime: cursor.readUInt32LE(),
+        workareaM2: cursor.readUInt32LE(),
+        extraAreaM2: cursor.readUInt32LE(),
+        waterboxType: cursor.readUInt8(),
+        startTimeSecs: cursor.readUInt32LE()
     };
 }
 

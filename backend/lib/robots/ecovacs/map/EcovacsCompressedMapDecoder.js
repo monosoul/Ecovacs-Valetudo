@@ -1,3 +1,4 @@
+const BinaryCursor = require("../ros/protocol/BinaryCursor");
 const Logger = require("../../../Logger");
 const lzma = require("lzma-purejs");
 require("../lzmaPurejsPkgIncludes");
@@ -74,9 +75,10 @@ function decodeEcovacsCompressedSubmap(raw) {
         throw new Error("Compressed submap payload is too short");
     }
 
-    const propsAndDict = raw.subarray(0, 5);
-    const uncompressedSize = raw.readUInt32LE(5);
-    const lzmaPayload = raw.subarray(9);
+    const cursor = new BinaryCursor(raw);
+    const propsAndDict = cursor.readBuffer(5);
+    const uncompressedSize = cursor.readUInt32LE();
+    const lzmaPayload = cursor.readBuffer(cursor.remaining());
 
     const lzmaAloneHeader = Buffer.alloc(13);
     propsAndDict.copy(lzmaAloneHeader, 0, 0, 5);
