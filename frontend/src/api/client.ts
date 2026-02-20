@@ -28,10 +28,13 @@ import {
     ManualControlProperties,
     MapSegmentationActionRequestParameters,
     MapSegmentationProperties,
+    RoomCleaningPreferencesRequestParameters,
+    RoomCleaningSequenceRequestParameters,
     MapSegmentEditJoinRequestParameters,
     MapSegmentEditSplitRequestParameters,
     MapSegmentMaterialControlProperties,
     MapSegmentMaterialControlRequestParameters,
+    MapSegmentRenameProperties,
     MapSegmentRenameRequestParameters,
     MopDockMopDryingDuration,
     MopDockMopDryingTimeControlProperties,
@@ -331,6 +334,33 @@ export const sendCleanSegmentsCommand = async (
     );
 };
 
+export const sendSetRoomCleaningPreferencesCommand = async (
+    parameters: RoomCleaningPreferencesRequestParameters
+): Promise<void> => {
+    await valetudoAPI.put(
+        `/robot/capabilities/${Capability.MapSegmentation}`,
+        {
+            action: "set_room_cleaning_preferences",
+            segment_id: parameters.segment_id,
+            suction: parameters.suction,
+            water: parameters.water,
+            times: parameters.times
+        }
+    );
+};
+
+export const sendSetRoomCleaningSequenceCommand = async (
+    parameters: RoomCleaningSequenceRequestParameters
+): Promise<void> => {
+    await valetudoAPI.put(
+        `/robot/capabilities/${Capability.MapSegmentation}`,
+        {
+            action: "set_room_cleaning_sequence",
+            sequence: parameters.sequence
+        }
+    );
+};
+
 export const sendJoinSegmentsCommand = async (
     parameters: MapSegmentEditJoinRequestParameters
 ): Promise<void> => {
@@ -369,6 +399,16 @@ export const sendRenameSegmentCommand = async (
             name: parameters.name
         }
     );
+};
+
+export const fetchMapSegmentRenameProperties = async (): Promise<MapSegmentRenameProperties> => {
+    return valetudoAPI
+        .get<MapSegmentRenameProperties>(
+            `/robot/capabilities/${Capability.MapSegmentRename}/properties`
+        )
+        .then(({data}) => {
+            return data;
+        });
 };
 
 export const sendSetSegmentMaterialCommand = async (parameters: MapSegmentMaterialControlRequestParameters): Promise<void> => {

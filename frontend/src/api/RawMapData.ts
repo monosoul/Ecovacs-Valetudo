@@ -45,7 +45,13 @@ export interface RawMapLayerMetaData {
     segmentId?: string;
     name?: string;
     active?: boolean;
-    material?: RawMapLayerMaterial
+    material?: RawMapLayerMaterial;
+    roomCleaningPreferences?: {
+        times?: number;
+        water?: number;
+        suction?: number;
+    } | null;
+    roomCleaningSequence?: number;
 }
 
 export enum RawMapLayerType {

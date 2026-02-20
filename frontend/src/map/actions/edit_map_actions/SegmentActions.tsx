@@ -1,14 +1,21 @@
 import {
     Capability,
+    useMapSegmentationPropertiesQuery,
+    useSetRoomCleaningPreferencesMutation,
+    useSetRoomCleaningSequenceMutation,
+    MapSegmentRenameProperties,
     MapSegmentMaterial,
     RawMapLayerMaterial,
     StatusState,
     useJoinSegmentsMutation,
     useMapSegmentMaterialControlPropertiesQuery,
+    useMapSegmentRenamePropertiesQuery,
     useRenameSegmentMutation,
     useSetSegmentMaterialMutation,
     useSplitSegmentMutation
 } from "../../../api";
+import SegmentCleaningPreferencesDialog from "./SegmentCleaningPreferencesDialog";
+import SegmentCleaningSequenceDialog from "./SegmentCleaningSequenceDialog";
 import React from "react";
 import {
     Button,
@@ -21,6 +28,7 @@ import {
     FormControl,
     FormControlLabel,
     Grid2,
+    MenuItem,
     Radio,
     RadioGroup,
     TextField,
@@ -33,7 +41,9 @@ import {
     Clear as ClearIcon,
     ContentCut as SplitIcon,
     Dashboard as MaterialIcon,
+    FormatListNumbered as SequenceIcon,
     JoinFull as JoinIcon,
+    Tune as CleaningPreferencesIcon,
 } from "@mui/icons-material";
 import {AddCuttingLineIcon, RenameIcon} from "../../../components/CustomIcons";
 
@@ -58,12 +68,19 @@ interface SegmentRenameDialogProps {
     open: boolean;
     onClose: () => void;
     currentName: string;
+    renameProperties: MapSegmentRenameProperties;
     onRename: (newName: string) => void;
 }
 
 const SegmentRenameDialog = (props: SegmentRenameDialogProps) => {
-    const {open, onClose, currentName, onRename} = props;
+    const {open, onClose, currentName, renameProperties, onRename} = props;
     const [name, setName] = React.useState(currentName);
+    const presetNames = Array.isArray(renameProperties?.presetNames) ? renameProperties.presetNames : [];
+    const usePresetDropdown = presetNames.length > 0;
+    let selectableNames: Array<string> = [];
+    if (usePresetDropdown) {
+        selectableNames = presetNames.includes(currentName) ? presetNames : [currentName, ...presetNames];
+    }
 
     React.useEffect(() => {
         if (open) {
@@ -78,23 +95,44 @@ const SegmentRenameDialog = (props: SegmentRenameDialogProps) => {
                 <DialogContentText>
                     How should the segment &apos;{currentName}&apos; be called?
                 </DialogContentText>
-                <TextField
-                    autoFocus
-                    margin="dense"
-                    variant="standard"
-                    label="Segment name"
-                    fullWidth
-                    value={name}
-                    onChange={(e) => {
-                        setName(e.target.value);
-                    }}
-                    onKeyDown={(e) => {
-                        if (e.key === "Enter") {
-                            e.preventDefault();
-                            onRename(name.trim());
-                        }
-                    }}
-                />
+                {
+                    usePresetDropdown ?
+                        <TextField
+                            autoFocus
+                            select
+                            margin="dense"
+                            variant="standard"
+                            label="Segment label"
+                            fullWidth
+                            value={name}
+                            onChange={(e) => {
+                                setName(e.target.value);
+                            }}
+                        >
+                            {selectableNames.map(option => (
+                                <MenuItem key={option} value={option}>
+                                    {option}
+                                </MenuItem>
+                            ))}
+                        </TextField> :
+                        <TextField
+                            autoFocus
+                            margin="dense"
+                            variant="standard"
+                            label="Segment name"
+                            fullWidth
+                            value={name}
+                            onChange={(e) => {
+                                setName(e.target.value);
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    onRename(name.trim());
+                                }
+                            }}
+                        />
+                }
             </DialogContent>
             <DialogActions>
                 <Button onClick={onClose}>Cancel</Button>
@@ -181,6 +219,12 @@ interface SegmentActionsProperties {
     selectedSegmentIds: string[];
     segmentNames: Record<string, string>;
     segmentMaterials: Record<string, RawMapLayerMaterial>;
+    segmentRoomCleaningPreferences: Record<string, {
+        times?: number;
+        water?: number;
+        suction?: number;
+    } | null>;
+    segmentRoomCleaningSequences: Record<string, number>;
     cuttingLine: CuttingLineClientStructure | undefined,
 
     convertPixelCoordinatesToCMSpace(coordinates: PointCoordinates): PointCoordinates
@@ -203,6 +247,8 @@ const SegmentActions = (
         selectedSegmentIds,
         segmentNames,
         segmentMaterials,
+        segmentRoomCleaningPreferences,
+        segmentRoomCleaningSequences,
         cuttingLine,
         convertPixelCoordinatesToCMSpace,
         supportedCapabilities,
@@ -212,6 +258,8 @@ const SegmentActions = (
 
     const [renameDialogOpen, setRenameDialogOpen] = React.useState(false);
     const [materialDialogOpen, setMaterialDialogOpen] = React.useState(false);
+    const [cleaningPreferencesDialogOpen, setCleaningPreferencesDialogOpen] = React.useState(false);
+    const [cleaningSequenceDialogOpen, setCleaningSequenceDialogOpen] = React.useState(false);
 
     const {
         mutate: joinSegments,
@@ -232,13 +280,37 @@ const SegmentActions = (
         onSuccess: onClear,
     });
     const {
+        data: renameProperties
+    } = useMapSegmentRenamePropertiesQuery();
+    const {
         mutate: setSegmentMaterial,
         isPending: setSegmentMaterialExecuting
     } = useSetSegmentMaterialMutation({
         onSuccess: onClear,
     });
+    const {
+        data: mapSegmentationProperties
+    } = useMapSegmentationPropertiesQuery();
+    const {
+        mutate: setRoomCleaningPreferences,
+        isPending: setRoomCleaningPreferencesPending
+    } = useSetRoomCleaningPreferencesMutation({
+        onSuccess: () => {
+            setCleaningPreferencesDialogOpen(false);
+        },
+    });
+    const {
+        mutate: setRoomCleaningSequence,
+        isPending: setRoomCleaningSequencePending
+    } = useSetRoomCleaningSequenceMutation({
+        onSuccess: () => {
+            setCleaningSequenceDialogOpen(false);
+        },
+    });
 
     const canEdit = props.robotStatus.value === "docked";
+    const roomCleaningPreferencesSupported = mapSegmentationProperties?.roomCleaningPreferencesSupport?.enabled === true;
+    const selectedSegmentId = selectedSegmentIds[0] ?? "";
 
     const handleSplitClick = React.useCallback(() => {
         if (!canEdit || !cuttingLine || selectedSegmentIds.length !== 1) {
@@ -290,6 +362,22 @@ const SegmentActions = (
             material: material
         });
     }, [canEdit, setSegmentMaterial, selectedSegmentIds]);
+
+    const handleSetRoomCleaningPreferences = React.useCallback((prefs: { suction: number; water: number; times: number }) => {
+        if (selectedSegmentIds.length !== 1) {
+            return;
+        }
+        setRoomCleaningPreferences({
+            segment_id: selectedSegmentIds[0],
+            suction: prefs.suction,
+            water: prefs.water,
+            times: prefs.times
+        });
+    }, [setRoomCleaningPreferences, selectedSegmentIds]);
+
+    const handleSetRoomCleaningSequence = React.useCallback((sequence: Record<string, number>) => {
+        setRoomCleaningSequence({sequence: sequence});
+    }, [setRoomCleaningSequence]);
 
 
     return (
@@ -399,6 +487,43 @@ const SegmentActions = (
                 </Grid2>
             }
             {
+                roomCleaningPreferencesSupported &&
+                selectedSegmentIds.length === 1 &&
+                cuttingLine === undefined &&
+
+                <Grid2>
+                    <ActionButton
+                        color="inherit"
+                        size="medium"
+                        variant="extended"
+                        onClick={() => {
+                            setCleaningPreferencesDialogOpen(true);
+                        }}
+                    >
+                        <CleaningPreferencesIcon style={{marginRight: "0.25rem", marginLeft: "-0.25rem"}}/>
+                        Room Preferences
+                    </ActionButton>
+                </Grid2>
+            }
+            {
+                roomCleaningPreferencesSupported &&
+                cuttingLine === undefined &&
+
+                <Grid2>
+                    <ActionButton
+                        color="inherit"
+                        size="medium"
+                        variant="extended"
+                        onClick={() => {
+                            setCleaningSequenceDialogOpen(true);
+                        }}
+                    >
+                        <SequenceIcon style={{marginRight: "0.25rem", marginLeft: "-0.25rem"}}/>
+                        Cleaning Order
+                    </ActionButton>
+                </Grid2>
+            }
+            {
                 supportedCapabilities[Capability.MapSegmentEdit] &&
                 selectedSegmentIds.length === 1 &&
                 cuttingLine === undefined &&
@@ -458,7 +583,20 @@ const SegmentActions = (
                     open={renameDialogOpen}
                     onClose={() => setRenameDialogOpen(false)}
                     currentName={segmentNames[selectedSegmentIds[0]] ?? selectedSegmentIds[0]}
+                    renameProperties={renameProperties ?? {}}
                     onRename={handleRename}
+                />
+            }
+
+            {
+                roomCleaningPreferencesSupported && selectedSegmentIds.length === 1 &&
+                <SegmentCleaningPreferencesDialog
+                    open={cleaningPreferencesDialogOpen}
+                    onClose={() => setCleaningPreferencesDialogOpen(false)}
+                    segmentName={segmentNames[selectedSegmentId] ?? selectedSegmentId}
+                    preferences={segmentRoomCleaningPreferences[selectedSegmentId]}
+                    onSave={handleSetRoomCleaningPreferences}
+                    isSaving={setRoomCleaningPreferencesPending}
                 />
             }
 
@@ -470,6 +608,18 @@ const SegmentActions = (
                     name={segmentNames[selectedSegmentIds[0]] ?? selectedSegmentIds[0]}
                     currentMaterial={segmentMaterials[selectedSegmentIds[0]] as unknown as MapSegmentMaterial ?? MapSegmentMaterial.Generic}
                     onSubmit={handleSetMaterial}
+                />
+            }
+
+            {
+                roomCleaningPreferencesSupported &&
+                <SegmentCleaningSequenceDialog
+                    open={cleaningSequenceDialogOpen}
+                    onClose={() => setCleaningSequenceDialogOpen(false)}
+                    segmentNames={segmentNames}
+                    segmentSequences={segmentRoomCleaningSequences}
+                    onSave={handleSetRoomCleaningSequence}
+                    isSaving={setRoomCleaningSequencePending}
                 />
             }
         </Grid2>
