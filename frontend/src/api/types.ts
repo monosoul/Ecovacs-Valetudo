@@ -88,11 +88,21 @@ export interface MapSegmentationProperties {
         max: number;
     };
     customOrderSupport: boolean;
+    roomCleaningPreferencesSupport?: {
+        enabled: boolean;
+    };
 }
 
 export interface Segment {
     id: string;
     name?: string;
+    metaData?: {
+        roomCleaningPreferences?: {
+            times?: number;
+            water?: number;
+            suction?: number;
+        } | null;
+    };
 }
 
 export interface RobotInformation {
@@ -175,6 +185,17 @@ export interface MapSegmentationActionRequestParameters {
     customOrder?: boolean;
 }
 
+export interface RoomCleaningPreferencesRequestParameters {
+    segment_id: string;
+    suction: number;
+    water: number;
+    times: number;
+}
+
+export interface RoomCleaningSequenceRequestParameters {
+    sequence: Record<string, number>;
+}
+
 export interface MapSegmentEditJoinRequestParameters {
     segment_a_id: string;
     segment_b_id: string;
@@ -189,6 +210,10 @@ export interface MapSegmentEditSplitRequestParameters {
 export interface MapSegmentRenameRequestParameters {
     segment_id: string;
     name: string;
+}
+
+export interface MapSegmentRenameProperties {
+    presetNames?: Array<string>;
 }
 
 export interface MapSegmentMaterialControlRequestParameters {

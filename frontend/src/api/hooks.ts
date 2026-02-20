@@ -24,6 +24,7 @@ import {
     fetchManualControlProperties,
     fetchManualControlState,
     fetchMap,
+    fetchMapSegmentRenameProperties,
     fetchMapSegmentationProperties,
     fetchMQTTConfiguration,
     fetchMQTTProperties,
@@ -54,6 +55,8 @@ import {
     sendBasicControlCommand,
     sendCarpetModeEnable,
     sendCleanSegmentsCommand,
+    sendSetRoomCleaningPreferencesCommand,
+    sendSetRoomCleaningSequenceCommand,
     sendCleanZonesCommand,
     sendCombinedVirtualRestrictionsUpdate,
     sendConsumableReset,
@@ -169,9 +172,12 @@ import {
     HTTPBasicAuthConfiguration,
     ManualControlInteraction,
     MapSegmentationActionRequestParameters,
+    RoomCleaningPreferencesRequestParameters,
+    RoomCleaningSequenceRequestParameters,
     MapSegmentEditJoinRequestParameters,
     MapSegmentEditSplitRequestParameters,
     MapSegmentMaterialControlRequestParameters,
+    MapSegmentRenameProperties,
     MapSegmentRenameRequestParameters,
     MopDockMopDryingDuration,
     MopDockMopWashTemperature,
@@ -259,6 +265,7 @@ enum QueryKey {
     MopExtensionFurnitureLegHandlingControl = "mop_extension_furniture_leg_handling_control",
     MopDockMopAutoDryingControl = "mop_dock_mop_auto_drying_control",
     MapSegmentMaterialControlProperties = "map_segment_material_control_properties",
+    MapSegmentRenameProperties = "map_segment_rename_properties",
     FloorMaterialDirectionAwareNavigationControl = "floor_material_direction_aware_navigation_control",
     CleanRouteControl = "clean_route_control",
     CleanRouteControlProperties = "clean_route_control_properties",
@@ -560,6 +567,32 @@ export const useCleanSegmentsMutation = (
     });
 };
 
+export const useSetRoomCleaningPreferencesMutation = (
+    options?: UseMutationOptions<void, unknown, RoomCleaningPreferencesRequestParameters>
+) => {
+    return useMutation({
+        mutationFn: (parameters: RoomCleaningPreferencesRequestParameters) => {
+            return sendSetRoomCleaningPreferencesCommand(parameters);
+        },
+        ...options,
+
+        onError: useOnCommandError(Capability.MapSegmentation),
+    });
+};
+
+export const useSetRoomCleaningSequenceMutation = (
+    options?: UseMutationOptions<void, unknown, RoomCleaningSequenceRequestParameters>
+) => {
+    return useMutation({
+        mutationFn: (parameters: RoomCleaningSequenceRequestParameters) => {
+            return sendSetRoomCleaningSequenceCommand(parameters);
+        },
+        ...options,
+
+        onError: useOnCommandError(Capability.MapSegmentation),
+    });
+};
+
 export const useJoinSegmentsMutation = (
     options?: UseMutationOptions<RobotAttribute[], unknown, MapSegmentEditJoinRequestParameters>
 ) => {
@@ -609,7 +642,7 @@ export const useRenameSegmentMutation = (
 
     return useMutation({
         mutationFn: (parameters: MapSegmentRenameRequestParameters) => {
-            return sendRenameSegmentCommand(parameters).then(fetchStateAttributes); //TODO: this should actually refetch the map
+            return sendRenameSegmentCommand(parameters).then(fetchStateAttributes);
         },
         ...options,
 
@@ -617,6 +650,10 @@ export const useRenameSegmentMutation = (
         onSuccess: async (data, ...args) => {
             queryClient.setQueryData<RobotAttribute[]>([QueryKey.Attributes], data, {
                 updatedAt: Date.now(),
+            });
+            await queryClient.invalidateQueries({
+                queryKey: [QueryKey.Map],
+                refetchType: "active"
             });
             await options?.onSuccess?.(data, ...args);
         },
@@ -627,6 +664,15 @@ export const useMapSegmentMaterialControlPropertiesQuery = () => {
     return useQuery( {
         queryKey: [QueryKey.MapSegmentMaterialControlProperties],
         queryFn: fetchMapSegmentMaterialControlProperties,
+
+        staleTime: Infinity,
+    });
+};
+
+export const useMapSegmentRenamePropertiesQuery = (): UseQueryResult<MapSegmentRenameProperties> => {
+    return useQuery({
+        queryKey: [QueryKey.MapSegmentRenameProperties],
+        queryFn: fetchMapSegmentRenameProperties,
 
         staleTime: Infinity,
     });

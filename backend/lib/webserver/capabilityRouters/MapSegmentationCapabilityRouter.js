@@ -38,6 +38,48 @@ class MapSegmentationCapabilityRouter extends CapabilityRouter {
                 } else {
                     res.sendStatus(400);
                 }
+            } else if (req.body.action === "set_room_cleaning_sequence") {
+                if (
+                    typeof req.body.sequence === "object" &&
+                    req.body.sequence !== null &&
+                    !Array.isArray(req.body.sequence) &&
+                    typeof this.capability.setRoomCleaningSequence === "function"
+                ) {
+                    try {
+                        await this.capability.setRoomCleaningSequence(req.body.sequence);
+
+                        res.sendStatus(200);
+                    } catch (e) {
+                        this.sendErrorResponse(req, res, e);
+                    }
+                } else {
+                    res.sendStatus(400);
+                }
+            } else if (req.body.action === "set_room_cleaning_preferences") {
+                if (
+                    typeof req.body.segment_id === "string" &&
+                    typeof req.body.suction === "number" &&
+                    typeof req.body.water === "number" &&
+                    typeof req.body.times === "number" &&
+                    typeof this.capability.setRoomCleaningPreferences === "function"
+                ) {
+                    try {
+                        await this.capability.setRoomCleaningPreferences(
+                            req.body.segment_id,
+                            {
+                                suction: req.body.suction,
+                                water: req.body.water,
+                                times: req.body.times
+                            }
+                        );
+
+                        res.sendStatus(200);
+                    } catch (e) {
+                        this.sendErrorResponse(req, res, e);
+                    }
+                } else {
+                    res.sendStatus(400);
+                }
             } else {
                 res.sendStatus(400);
             }
