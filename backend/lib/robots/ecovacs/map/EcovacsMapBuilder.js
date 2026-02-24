@@ -11,10 +11,11 @@ const {worldMmToMapPointCm} = require("./EcovacsMapTransforms");
  * @param {{x:number,y:number,angle:number}|null} robotPose
  * @param {{width:number,height:number,resolutionCm:number,floorPixels:Array<[number,number]>,wallPixels:Array<[number,number]>}} compressedMap
  * @param {Array<{vwid:number,type:number,dots:Array<[number,number]>}>} [virtualWalls]
+ * @param {Array<Array<number>>} [carpetPolygons] - carpet polygon point arrays in world mm [x1,y1,x2,y2,...]
  * @param {{rotationDegrees:number, worldMmPerPixel:number, cachedRoomCleaningPreferences:Object<string,{suction:number,water:number,times:number,sequence:number}>}} options
  * @returns {import("../../../entities/map/ValetudoMap")}
  */
-function buildMap(rooms, positions, robotPose, compressedMap, virtualWalls, options) {
+function buildMap(rooms, positions, robotPose, compressedMap, virtualWalls, carpetPolygons, options) {
     const pixelSizeCm = Number(compressedMap.resolutionCm);
     if (!Number.isFinite(pixelSizeCm) || pixelSizeCm <= 0) {
         throw new Error("Invalid compressed map pixel size");
@@ -91,54 +92,37 @@ function buildMap(rooms, positions, robotPose, compressedMap, virtualWalls, opti
         }));
     }
 
-    const detailedEntities = [];
-    const chargerPose = positions?.charger?.pose;
-    if (chargerPose && typeof chargerPose.x === "number" && typeof chargerPose.y === "number") {
-        const chargerGrid = worldToGridScriptCompatible(
-            Number(chargerPose.x),
-            Number(chargerPose.y),
-            mapWidthPx,
-            mapHeightPx,
-            mmPerPixel
-        );
-        if (chargerGrid) {
-            detailedEntities.push(new mapEntities.PointMapEntity({
-                type: mapEntities.PointMapEntity.TYPE.CHARGER_LOCATION,
-                points: [
-                    chargerGrid.x * pixelSizeCm,
-                    chargerGrid.y * pixelSizeCm
-                ]
-            }));
-        }
-    }
-    if (robotPose) {
-        const robotGrid = worldToGridScriptCompatible(
-            Number(robotPose.x),
-            Number(robotPose.y),
-            mapWidthPx,
-            mapHeightPx,
-            mmPerPixel
-        );
-        if (robotGrid) {
-            detailedEntities.push(new mapEntities.PointMapEntity({
-                type: mapEntities.PointMapEntity.TYPE.ROBOT_POSITION,
-                points: [
-                    robotGrid.x * pixelSizeCm,
-                    robotGrid.y * pixelSizeCm
-                ],
-                metaData: {
-                    angle: Number.isFinite(robotPose.angle) ? robotPose.angle : 0
-                }
-            }));
-        }
-    }
     const transform = {
         mapHeightPx: mapHeightPx,
         mapWidthPx: mapWidthPx,
         mmPerPixel: mmPerPixel,
         rotationDegrees: mapRotation,
     };
+    const detailedEntities = [];
+    const chargerPose = positions?.charger?.pose;
+    if (chargerPose && typeof chargerPose.x === "number" && typeof chargerPose.y === "number") {
+        const chargerPoint = worldMmToMapPointCm(transform, Number(chargerPose.x), Number(chargerPose.y), pixelSizeCm);
+        if (chargerPoint) {
+            detailedEntities.push(new mapEntities.PointMapEntity({
+                type: mapEntities.PointMapEntity.TYPE.CHARGER_LOCATION,
+                points: chargerPoint
+            }));
+        }
+    }
+    if (robotPose) {
+        const robotPoint = worldMmToMapPointCm(transform, Number(robotPose.x), Number(robotPose.y), pixelSizeCm);
+        if (robotPoint) {
+            detailedEntities.push(new mapEntities.PointMapEntity({
+                type: mapEntities.PointMapEntity.TYPE.ROBOT_POSITION,
+                points: robotPoint,
+                metaData: {
+                    angle: Number.isFinite(robotPose.angle) ? robotPose.angle : 0
+                }
+            }));
+        }
+    }
     detailedEntities.push(...buildRestrictionEntities(transform, pixelSizeCm, virtualWalls));
+    detailedEntities.push(...buildCarpetEntities(transform, pixelSizeCm, carpetPolygons));
 
     return new mapEntities.ValetudoMap({
         size: {
@@ -456,6 +440,43 @@ function buildRestrictionEntities(transform, pixelSizeCm, virtualWalls) {
             entitiesOut.push(new mapEntities.LineMapEntity({
                 type: mapEntities.LineMapEntity.TYPE.VIRTUAL_WALL,
                 points: flattened
+            }));
+        }
+    }
+
+    return entitiesOut;
+}
+
+/**
+ * @param {any} transform
+ * @param {number} pixelSizeCm
+ * @param {Array<Array<number>>} [carpetPolygons]
+ * @returns {Array<any>}
+ */
+function buildCarpetEntities(transform, pixelSizeCm, carpetPolygons) {
+    /** @type {Array<any>} */
+    const entitiesOut = [];
+    const rotation = transform.rotationDegrees ?? 0;
+    const unrotatedWidth = (rotation === 90 || rotation === 270) ? transform.mapHeightPx : transform.mapWidthPx;
+    const unrotatedHeight = (rotation === 90 || rotation === 270) ? transform.mapWidthPx : transform.mapHeightPx;
+
+    for (const polygon of (Array.isArray(carpetPolygons) ? carpetPolygons : [])) {
+        if (polygon.length < 6) {
+            continue;
+        }
+        const unrotatedPixels = [];
+        for (let i = 0; i < polygon.length; i += 2) {
+            unrotatedPixels.push([
+                Math.round(unrotatedWidth / 2 + polygon[i] / transform.mmPerPixel),
+                Math.round(unrotatedHeight / 2 - polygon[i + 1] / transform.mmPerPixel)
+            ]);
+        }
+        const rotated = rotatePixelsClockwise(unrotatedPixels, unrotatedWidth, unrotatedHeight, rotation);
+        const pointsCm = rotated.pixels.flat().map(v => v * pixelSizeCm);
+        if (pointsCm.length >= 6) {
+            entitiesOut.push(new mapEntities.PolygonMapEntity({
+                type: mapEntities.PolygonMapEntity.TYPE.CARPET,
+                points: pointsCm
             }));
         }
     }

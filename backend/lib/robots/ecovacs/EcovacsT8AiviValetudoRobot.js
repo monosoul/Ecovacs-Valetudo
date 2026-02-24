@@ -33,6 +33,7 @@ const {clampInt} = require("./map/EcovacsMapTransforms");
 const {decodeCompressedMapResponse} = require("./map/EcovacsCompressedMapDecoder");
 const {decodeTraceRawHexToWorldMmPoints} = require("./map/EcovacsTraceDecoder");
 const {formatMapStats, getLayerPixelCountByType, getTotalLayerPixelCount, hasChargerEntity, hasRobotEntity} = require("./map/EcovacsMapStats");
+const {readCarpetMap} = require("./map/EcovacsCarpetMapReader");
 
 const stateAttrs = entities.state.attributes;
 const DEFAULT_RUNTIME_STATE_CACHE_PATH = "/tmp/valetudo_ecovacs_runtime_state.json";
@@ -319,12 +320,19 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
                     `Ecovacs map poll: decoded compressed map (${compressedMap.width}x${compressedMap.height})`
                 );
             }
+            let carpetPolygons = [];
+            try {
+                carpetPolygons = readCarpetMap();
+            } catch (e) {
+                Logger.debug(`Ecovacs map poll: carpet map read failed: ${e.message}`);
+            }
             const map = buildMap(
                 roomDump.rooms,
                 positions,
                 robotPoseSnapshot,
                 compressedMap,
                 virtualWalls,
+                carpetPolygons,
                 {
                     rotationDegrees: this.detailedMapRotationDegrees,
                     worldMmPerPixel: this.detailedMapWorldMmPerPixel,
