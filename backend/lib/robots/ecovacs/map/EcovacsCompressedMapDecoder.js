@@ -116,4 +116,5 @@ function inferCompressedMapPixelSizeCm(raw) {
 
 module.exports = {
     decodeCompressedMapResponse: decodeCompressedMapResponse,
+    decodeEcovacsLzmaPayload: decodeEcovacsCompressedSubmap,
 };
