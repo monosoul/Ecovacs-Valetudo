@@ -176,9 +176,13 @@ class DreameMapParser {
                                     }).metaData.name = l.metaData.name;
                                 }
                                 if (l.metaData.material) {
-                                    layers.find(eL => {
+                                    const layer = layers.find(eL => {
                                         return eL.metaData.segmentId === l.metaData.segmentId;
-                                    }).metaData.material = l.metaData.material;
+                                    });
+
+                                    if (layer.metaData.material === undefined) {
+                                        layer.metaData.material = l.metaData.material;
+                                    }
                                 }
                             }
                         } else {
