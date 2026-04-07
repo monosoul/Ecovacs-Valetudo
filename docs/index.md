@@ -41,6 +41,8 @@ The [newcomer guide](https://valetudo.cloud/pages/general/newcomer-guide.html) i
 
 If you're looking to make content out of Valetudo, please read [Media & Content Creators](https://valetudo.cloud/pages/general/media.html).
 
+If you're looking for something less opinionated that also achieves "cloud-free modern vacuum robot connected to home assistant", check out [Roborock Local Server](https://github.com/Python-roborock/local_roborock_server) by [Luke Lashley](https://github.com/Lash-L).
+
 ### Screenshots
 
 ### Phone/Mobile
@@ -95,6 +97,8 @@ Therefore, a garden being build with a specific vision does not take away the ab
     <br/><br/>
     I hang out there in my free time, and, as any human, I'd like to spend my free time pleasantly and surrounded by people that understand and respect me.
     Contrary to e.g. your workplace, where tolerating is all that is expected of you, understanding cannot be made optional in such a space, as the economics that allow it to exist would otherwise not work out.
+    <br/><br/>
+    In layman's terms, this means that you will be banned on <em>sigh</em>. (Not a typo)
 </p>
 </div>
 

@@ -36,6 +36,8 @@ and also the docs in general at [https://valetudo.cloud](https://valetudo.cloud)
 
 There, you will find a list of [supported robots](https://valetudo.cloud/pages/general/supported-robots.html).
 
+If you're looking for something less opinionated that also achieves "cloud-free modern vacuum robot connected to home assistant", check out [Roborock Local Server](https://github.com/Python-roborock/local_roborock_server) by [Luke Lashley](https://github.com/Lash-L).
+
 ## Screenshots
 
 ### Phone/Mobile
@@ -86,6 +88,8 @@ Therefore, a garden being build with a specific vision does not take away the ab
 >
 > I hang out there in my free time, and, as any human, I'd like to spend my free time pleasantly and surrounded by people that understand and respect me.
 > Contrary to e.g. your workplace, where tolerating is all that is expected of you, understanding cannot be made optional in such a space, as the economics that allow it to exist would otherwise not work out.
+>
+> In layman's terms, this means that you will be banned on _sigh_. (Not a typo)
 
 1. [dust_announce - Very low frequency updates about Valetudo and Rooting](https://t.me/dust_announce)
 

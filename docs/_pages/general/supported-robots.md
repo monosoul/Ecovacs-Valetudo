@@ -655,6 +655,10 @@ After that, you will have to reconfigure Wi-Fi using Valetudo.
 **Valetudo Binary**: `aarch64`
 **Secure Boot**: `yes`
 
+#### Rooting instructions
+
+- [Fastboot](https://valetudo.cloud/pages/installation/dreame.html#fastboot)
+
 ### X30 Ultra <a id="dreame_x30ultra"></a>
 
 <img src="img/robots/dreame/dreame_x30ultra.jpg" width="1300" height="325"/>
@@ -690,6 +694,9 @@ The Dreame L40 Ultra is sold as:
 
 It is **not sold** as the L40 Ultra **AE** nor as the L40**s Pro Ultra** nor any other name that isn't exactly this one.<br/>
 Those are all completely different robots with confusing names that are **not** supported.
+
+Additionally, Dreame has started selling "L40" that are actually just rebadged "L10s Pro Gen3" in some markets, capitalizing on the good online reputation of the "L40" name.<br/>
+That, too, is a different unsupported robot + the vendor trying to rip you off.
 
 #### Comments
 

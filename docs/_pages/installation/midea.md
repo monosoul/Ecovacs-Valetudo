@@ -10,6 +10,9 @@ Please check the [supported robots](https://valetudo.cloud/pages/general/support
 Also note that all rooting guides assume a factory-new robot that has never been connected to the vendor cloud.<br/>
 If you've used any vendor apps before, make sure to do a full factory-reset before starting with the rooting procedure.
 
+Valetudo will **never** require you to use any vendor app.<br/>
+In fact, using it will potentially interfere with your ability to install and use Valetudo.
+
 <div class="section-box" markdown="1">
 
 ## ADB <a id="adb"></a>
@@ -73,6 +76,9 @@ Password:
 
 
 If you're seeing `OTP Password:`, then you're on the happy path. Otherwise, it's the unhappy path.
+
+Which one you will get depends on the model of robot and the installed firmware version, meaning that it may change if the firmware has been updated.
+As always with this kind of hardware hacking, every firmware update has the potential to come with new locks, meaning that you should **not ever** update using the vendor app/cloud.
 
 ### Step 2: Building the update package
 
@@ -193,5 +199,12 @@ After the first reboot, you relaunch it by running:
 
 Eventually, Valetudo will be installed and you can continue with the [getting started guide](https://valetudo.cloud/pages/general/getting-started.html#joining_wifi).
 
+<div class="alert alert-note" role="alert">
+  <p>
+    <strong>Note:</strong><br/>
+    There can be minimum firmware requirements for updates.<br/>
+    If the installer refuses to run due to a too old firmware, just select the next-older version in the dustbuilder, build a new package and try again.
+</p>
+</div>
 
 </div>
