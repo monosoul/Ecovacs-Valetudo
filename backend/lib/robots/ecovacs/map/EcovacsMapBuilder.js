@@ -10,8 +10,8 @@ const {worldMmToMapPointCm} = require("./EcovacsMapTransforms");
  * @param {any} positions
  * @param {{x:number,y:number,angle:number}|null} robotPose
  * @param {{width:number,height:number,resolutionCm:number,floorPixels:Array<[number,number]>,wallPixels:Array<[number,number]>}} compressedMap
- * @param {Array<{vwid:number,type:number,dots:Array<[number,number]>}>} [virtualWalls]
- * @param {Array<Array<number>>} [carpetPolygons] - carpet polygon point arrays in world mm [x1,y1,x2,y2,...]
+ * @param {Array<{vwid:number,type:number,dots:Array<[number,number]>}>} virtualWalls
+ * @param {Array<Array<number>>} carpetPolygons - carpet polygon point arrays in world mm [x1,y1,x2,y2,...]
  * @param {{rotationDegrees:number, worldMmPerPixel:number, cachedRoomCleaningPreferences:Object<string,{suction:number,water:number,times:number,sequence:number}>}} options
  * @returns {import("../../../entities/map/ValetudoMap")}
  */
@@ -306,6 +306,7 @@ function normalizeClockwiseRotation(rotation) {
  */
 function rotatePixelsClockwise(pixels, width, height, rotation) {
     const inPixels = Array.isArray(pixels) ? pixels : [];
+    /** @type {Array<[number, number]>} */
     const out = [];
     if (rotation === 0) {
         for (const [x, y] of inPixels) {
@@ -464,6 +465,7 @@ function buildCarpetEntities(transform, pixelSizeCm, carpetPolygons) {
         if (polygon.length < 6) {
             continue;
         }
+        /** @type {Array<[number, number]>} */
         const unrotatedPixels = [];
         for (let i = 0; i < polygon.length; i += 2) {
             unrotatedPixels.push([

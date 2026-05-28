@@ -10,32 +10,31 @@ class EcovacsMapSegmentationCapability extends MapSegmentationCapability {
      * @returns {Promise<Array<import("../../../entities/core/ValetudoMapSegment")>>}
      */
     async getSegments() {
-        const cache = this.robot.cachedRoomCleaningPreferences ?? {};
+        const cache = this.robot.cachedRoomCleaningPreferences;
 
         return this.robot.state.map.layers
             .filter(layer => {
                 return layer.type === MapLayer.TYPE.SEGMENT;
             })
             .map(layer => {
-                let id = layer.metaData.segmentId;
-                if (typeof id === "number") {
-                    id = id.toString();
-                }
+                const meta = /** @type {any} */ (layer.metaData);
+                const id = String(meta.segmentId);
 
-                const layerPrefs = layer.metaData.roomCleaningPreferences;
-                const cachedPrefs = cache[String(id)] ?? {};
+                const layerPrefs = meta.roomCleaningPreferences;
+                /** @type {{suction?: number, water?: number, times?: number, sequence?: number}} */
+                const cachedPrefs = cache[id] ?? {};
 
                 return new ValetudoMapSegment({
                     id: id,
-                    name: layer.metaData.name,
-                    material: layer.metaData.material,
+                    name: meta.name,
+                    material: meta.material,
                     metaData: {
                         roomCleaningPreferences: {
                             suction: layerPrefs?.suction ?? cachedPrefs.suction,
                             water: layerPrefs?.water ?? cachedPrefs.water,
                             times: layerPrefs?.times ?? cachedPrefs.times,
                         },
-                        roomCleaningSequence: layer.metaData.roomCleaningSequence ?? cachedPrefs.sequence ?? 0
+                        roomCleaningSequence: meta.roomCleaningSequence ?? cachedPrefs.sequence ?? 0
                     }
                 });
             });
@@ -62,12 +61,12 @@ class EcovacsMapSegmentationCapability extends MapSegmentationCapability {
         );
 
         // Update cache immediately so the UI reflects the change
-        const existing = this.robot.cachedRoomCleaningPreferences[String(roomId)] ?? {};
+        const existing = this.robot.cachedRoomCleaningPreferences[String(roomId)];
         this.robot.cachedRoomCleaningPreferences[String(roomId)] = {
             suction: preferences.suction,
             water: preferences.water,
             times: preferences.times,
-            sequence: existing.sequence ?? 0,
+            sequence: existing?.sequence ?? 0,
         };
 
         // Trigger a map poll so the map layers also get refreshed

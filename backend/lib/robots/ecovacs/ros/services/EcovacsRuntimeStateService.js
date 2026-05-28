@@ -78,7 +78,7 @@ class EcovacsRuntimeStateService {
     }
 
     /**
-     * @param {number} staleMs
+     * @param {number} [staleMs]
      * @returns {{battery:{battery:number,isLowVoltageToPowerOff:number}|null,chargeState:{isOnCharger:number,chargeState:number}|null}}
      */
     getPowerState(staleMs) {
@@ -89,7 +89,7 @@ class EcovacsRuntimeStateService {
     }
 
     /**
-     * @param {number} staleMs
+     * @param {number} [staleMs]
      * @returns {{battery:{battery:number,isLowVoltageToPowerOff:number}|null,chargeState:{isOnCharger:number,chargeState:number}|null,workState:{worktype:number,state:number,workcause:number}|null}}
      */
     getRuntimeState(staleMs) {
@@ -104,7 +104,7 @@ class EcovacsRuntimeStateService {
      * Get the latest triggered alerts from the /alert/Alerts topic.
      * Returns an array of triggered alerts (state === 1), or null if stale/unavailable.
      *
-     * @param {number} staleMs
+     * @param {number} [staleMs]
      * @returns {Array<{type: number, state: number}>|null}
      */
     getTriggeredAlerts(staleMs) {
