@@ -55,6 +55,9 @@ module.exports = MapSegmentationCapability;
  * @property {object} iterationCount
  * @property {number} iterationCount.min
  * @property {number} iterationCount.max
- * 
+ *
  * @property {boolean} customOrderSupport
+ *
+ * @property {object} [roomCleaningPreferencesSupport]
+ * @property {boolean} roomCleaningPreferencesSupport.enabled
  */

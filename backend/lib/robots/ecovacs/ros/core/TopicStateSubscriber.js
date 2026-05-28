@@ -58,7 +58,7 @@ class TopicStateSubscriber {
     }
 
     /**
-     * @param {number} staleAfterMs
+     * @param {number} [staleAfterMs]
      * @returns {any|null}
      */
     getLatestValue(staleAfterMs) {

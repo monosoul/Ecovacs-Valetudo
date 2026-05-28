@@ -112,6 +112,7 @@ class EcovacsVirtualWallService {
         const wall = {
             vwid: vwid,
             type: wallType,
+            /** @type {Array<[number, number]>} */
             dots: dots.map(dot => [Number(dot[0]), Number(dot[1])])
         };
         const response = await this.callVirtualWall({
@@ -210,6 +211,7 @@ function parseVirtualWallResponse(body) {
         const vwid = cursor.readUInt32LE();
         const type = cursor.readUInt8();
         const dotsCount = cursor.readUInt32LE();
+        /** @type {Array<[number, number]>} */
         const dots = [];
         for (let j = 0; j < dotsCount; j++) {
             dots.push([cursor.readFloatLE(), cursor.readFloatLE()]);

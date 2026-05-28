@@ -130,7 +130,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         const cachedBatteryLevel = Number(this.runtimeStateCache.data?.battery?.level);
         const cachedBatteryFlag = this.runtimeStateCache.data?.battery?.flag;
         const batteryLevel = Number.isFinite(cachedBatteryLevel) ? clampInt(cachedBatteryLevel, 0, 100) : 0;
-        const batteryFlag = Object.values(stateAttrs.BatteryStateAttribute.FLAG).includes(cachedBatteryFlag) ?
+        const batteryFlag = /** @type {Array<string>} */ (Object.values(stateAttrs.BatteryStateAttribute.FLAG)).includes(cachedBatteryFlag) ?
             cachedBatteryFlag :
             stateAttrs.BatteryStateAttribute.FLAG.NONE;
         this.state.upsertFirstMatchingAttribute(new stateAttrs.BatteryStateAttribute({
@@ -381,6 +381,13 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             flag: flag ?? stateAttrs.StatusStateAttribute.FLAG.NONE
         }));
         this.emitStateAttributesUpdated();
+    }
+
+    /**
+     * @public
+     */
+    emitStateAttributesUpdated() {
+        super.emitStateAttributesUpdated();
     }
 
     async shutdown() {
