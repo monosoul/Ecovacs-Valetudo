@@ -46,6 +46,7 @@ function readCarpetMap(filePath) {
         return [];
     }
 
+    /** @type {Array<[number, number]>} */
     const carpetPixels = [];
     for (let y = 0; y < CARPET_MAP_GRID_SIDE; y++) {
         const rowOffset = y * CARPET_MAP_GRID_SIDE;

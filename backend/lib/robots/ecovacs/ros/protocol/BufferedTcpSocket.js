@@ -95,7 +95,7 @@ class BufferedTcpSocket {
 
     /**
      * @param {number} length
-     * @param {number} timeoutMs
+     * @param {number} [timeoutMs]
      * @returns {Promise<Buffer>}
      */
     async readExact(length, timeoutMs) {

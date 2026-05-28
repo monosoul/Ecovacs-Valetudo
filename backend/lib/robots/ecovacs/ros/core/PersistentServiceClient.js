@@ -14,6 +14,7 @@ class PersistentServiceClient {
      * @param {number} [options.connectTimeoutMs]
      * @param {number} [options.callTimeoutMs]
      * @param {boolean} [options.persistent]
+     * @param {boolean} [options.debug]
      */
     constructor(options) {
         this.masterClient = options.masterClient;
@@ -26,6 +27,7 @@ class PersistentServiceClient {
         this.debug = options.debug ?? false;
 
         this.socket = null;
+        /** @type {Promise<unknown>} */
         this.lock = Promise.resolve();
     }
 

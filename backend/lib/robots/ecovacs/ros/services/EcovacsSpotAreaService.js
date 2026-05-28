@@ -244,6 +244,7 @@ function parseSpotAreaGetResponse(body) {
         const labelId = cursor.readUInt8();
 
         const pointCount = cursor.readUInt32LE();
+        /** @type {Array<[number, number]>} */
         const polygon = [];
         for (let j = 0; j < pointCount; j++) {
             polygon.push([cursor.readFloatLE(), cursor.readFloatLE()]);

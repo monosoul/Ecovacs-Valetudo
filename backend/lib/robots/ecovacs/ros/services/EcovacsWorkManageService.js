@@ -138,6 +138,7 @@ class EcovacsWorkManageService {
      * @returns {Promise<number>}
      */
     async startCustomClean(rects) {
+        /** @type {Array<[number, number]>} */
         const points = [];
         for (const [x1, y1, x2, y2] of rects) {
             points.push([Number(x1), Number(y1)], [Number(x2), Number(y2)]);

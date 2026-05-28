@@ -302,7 +302,7 @@ function serializeSettingManageRequest(options) {
 
 /**
  * @param {Buffer} body
- * @returns {{response:number,settingType:number,customSettingVal:number,waterLevel:number,fanMode:number,fanIsSilent:number,autoCollect:number,roomPreferences:number,cleaningTimes:number}}
+ * @returns {{response:number,settingType:number,customType:number,customSettingVal:number,waterLevel:number,fanMode:number,fanIsSilent:number,autoCollect:number,roomPreferences:number,cleaningTimes:number}}
  */
 function parseSettingManageResponse(body) {
     const cursor = new BinaryCursor(body);

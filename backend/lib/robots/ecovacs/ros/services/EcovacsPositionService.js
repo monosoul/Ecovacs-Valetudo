@@ -59,7 +59,7 @@ class EcovacsPositionService {
 
     /**
      * @param {number} mapId
-     * @param {number} stalePoseMs
+     * @param {number} [stalePoseMs]
      * @returns {Promise<any>}
      */
     async getPositions(mapId, stalePoseMs) {
