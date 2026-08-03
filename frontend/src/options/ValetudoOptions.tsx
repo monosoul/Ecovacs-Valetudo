@@ -101,6 +101,10 @@ const updateProviders : Array<SelectListMenuItemOption> = [
     {
         value: "github_nightly",
         label: "Nightly"
+    },
+    {
+        value: "self_hosted",
+        label: "Self-Hosted"
     }
 ];
 

@@ -388,7 +388,8 @@
                 "type": "string",
                 "enum": [
                   "github",
-                  "github_nightly"
+                  "github_nightly",
+                  "self_hosted"
                 ]
               },
               "implementationSpecificConfig": {

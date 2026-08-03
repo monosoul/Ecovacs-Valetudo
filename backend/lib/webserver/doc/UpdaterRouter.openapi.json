@@ -98,7 +98,8 @@
                     "type": "string",
                     "enum": [
                       "github",
-                      "github_nightly"
+                      "github_nightly",
+                      "self_hosted"
                     ]
                   }
                 }
@@ -123,7 +124,8 @@
                   "type": "string",
                   "enum": [
                     "github",
-                    "github_nightly"
+                    "github_nightly",
+                    "self_hosted"
                   ]
                 }
               }
@@ -139,6 +141,12 @@
                 "description": "Use the Github Nightly update provider",
                 "value": {
                   "updateProvider": "github_nightly"
+                }
+              },
+              "self_hosted":{
+                "description": "Use the self-hosted update provider (e.g. a mirror proxy reachable without internet access). The base url is configured via updateProvider.implementationSpecificConfig.url in the config file.",
+                "value": {
+                  "updateProvider": "self_hosted"
                 }
               }
             }
