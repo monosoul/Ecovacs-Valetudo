@@ -123,6 +123,9 @@ import {
     fetchObstacleImagesProperties,
     fetchObstacleImagesState,
     sendObstacleImagesState,
+    fetchDuststreamingProperties,
+    fetchDuststreamingConfiguration,
+    sendDuststreamingConfiguration,
     fetchHighResolutionManualControlState,
     sendHighResolutionManualControlInteraction,
     fetchMopExtensionControlState,
@@ -165,6 +168,7 @@ import {
     AutoEmptyDockAutoEmptyDuration,
     AutoEmptyDockAutoEmptyInterval,
     Capability,
+    DuststreamingConfiguration,
     CarpetSensorMode,
     CleanRoute,
     CombinedVirtualRestrictionsUpdateRequestParameters,
@@ -260,6 +264,8 @@ enum QueryKey {
     CarpetSensorModeProperties = "carpet_sensor_mode_properties",
     ObstacleImages = "obstacle_image",
     ObstacleImagesProperties = "obstacle_image_properties",
+    DuststreamingProperties = "duststreaming_properties",
+    DuststreamingConfiguration = "duststreaming_configuration",
     MopExtensionControl = "mop_extension_control",
     CameraLightControl = "camera_light_control",
     MopDockMopWashTemperature = "mop_dock_mop_wash_temperature",
@@ -1688,6 +1694,44 @@ export const prefetchObstacleImagesProperties = async (queryClient : QueryClient
             queryFn: fetchObstacleImagesProperties,
         });
     }
+};
+
+export const useDuststreamingPropertiesQuery = () => {
+    return useQuery( {
+        queryKey: [QueryKey.DuststreamingProperties],
+        queryFn: fetchDuststreamingProperties,
+
+        staleTime: Infinity,
+    });
+};
+
+export const useDuststreamingConfigurationQuery = (options?: { enabled?: boolean }) => {
+    return useQuery( {
+        queryKey: [QueryKey.DuststreamingConfiguration],
+        queryFn: fetchDuststreamingConfiguration,
+
+        enabled: options?.enabled ?? true,
+        staleTime: Infinity,
+    });
+};
+
+export const useDuststreamingConfigurationMutation = () => {
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: (configuration: DuststreamingConfiguration) => {
+            return sendDuststreamingConfiguration(configuration).then(fetchDuststreamingConfiguration).then((configuration) => {
+                queryClient.setQueryData<DuststreamingConfiguration>([QueryKey.DuststreamingConfiguration], configuration, {
+                    updatedAt: Date.now(),
+                });
+
+                queryClient.invalidateQueries({
+                    queryKey: [QueryKey.DuststreamingProperties]
+                });
+            });
+        },
+        onError: useOnSettingsChangeError("Camera Streaming")
+    });
 };
 
 export const useMopDockMopWashTemperatureQuery = () => {
