@@ -1,3 +1,45 @@
+# Fork notes
+
+> This is a fork of [Hypfer/Valetudo](https://github.com/Hypfer/Valetudo) adding support for the **Ecovacs T8 AIVI** robot.
+
+## Self-hosted updates
+
+In addition to the stock `github` / `github_nightly` update channels, this fork adds a **`self_hosted`**
+update provider. It behaves exactly like the GitHub provider but fetches releases from a
+user-configurable base URL instead of `api.github.com`.
+
+This is intended for robots on a network **without direct internet access** (e.g. an isolated
+Wi-Fi hotspot). Pair it with the [Valetudo Update Companion](https://github.com/monosoul/ha-valetudo-update-companion)
+Home Assistant add-on, which mirrors this fork's GitHub releases onto the local network as a
+GitHub-releases-API-compatible endpoint. The robot then updates over plain HTTP against that add-on.
+
+### Enabling it on the robot
+
+Set the updater to the `self_hosted` provider and point it at the companion in Valetudo's `config.json`:
+
+```json
+"updater": {
+  "enabled": true,
+  "updateProvider": {
+    "type": "self_hosted",
+    "implementationSpecificConfig": {
+      "url": "http://<home-assistant-ip>:8080/releases"
+    }
+  }
+}
+```
+
+`<home-assistant-ip>` is the address of the machine running the companion add-on on the robot's
+network. Once `url` is set, the **Self-Hosted** channel can also be selected from
+*Settings → Updater* in the web interface. Then run check → download → apply as usual (the robot
+must be docked).
+
+The `self_hosted` provider verifies the same per-binary `sha256` checksums from
+`valetudo_release_manifest.json` as the regular GitHub provider, so downloads are integrity-checked
+end to end.
+
+---
+
 <div align="center">
     <img src="https://github.com/Hypfer/Valetudo/blob/master/assets/logo/valetudo_logo_with_name.svg" width="800" alt="valetudo">
     <p align="center"><h2>Free your vacuum from the cloud</h2></p>

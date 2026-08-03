@@ -584,7 +584,7 @@ export interface CombinedVirtualRestrictionsProperties {
 }
 
 export interface UpdaterConfiguration {
-    updateProvider: "github" | "github_nightly";
+    updateProvider: "github" | "github_nightly" | "self_hosted";
 }
 
 export interface UpdaterStateMetaData {

@@ -77,6 +77,13 @@ class UpdaterRouter {
                         };
 
                         break;
+                    case "self_hosted":
+                        newUpdateProviderConfig = {
+                            type: "self_hosted",
+                            implementationSpecificConfig: currentConfig.updateProvider.implementationSpecificConfig ?? {}
+                        };
+
+                        break;
                 }
 
                 if (newUpdateProviderConfig) {
