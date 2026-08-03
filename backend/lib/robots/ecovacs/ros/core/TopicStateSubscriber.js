@@ -34,6 +34,7 @@ class TopicStateSubscriber {
 
         this.running = false;
         this.loopPromise = null;
+        this.socket = null;
         this.latestValue = null;
         this.latestAt = 0;
     }
@@ -48,6 +49,21 @@ class TopicStateSubscriber {
 
     async shutdown() {
         this.running = false;
+
+        // Setting this.running = false is only observed at the loop boundaries.
+        // When the subscriber is parked inside socket.readExact() waiting for the
+        // next message on a quiet topic, that read has no timeout and would never
+        // return on its own. Closing the active socket rejects the pending read so
+        // runLoop can unwind; otherwise awaiting loopPromise below would hang
+        // forever (which stalls the entire shutdown chain / Operation Phoenix).
+        if (this.socket) {
+            try {
+                await this.socket.close();
+            } catch (e) {
+                // ignore shutdown race
+            }
+        }
+
         try {
             await this.loopPromise;
         } catch (e) {
@@ -85,6 +101,7 @@ class TopicStateSubscriber {
                 }
 
                 socket = new BufferedTcpSocket();
+                this.socket = socket;
                 await socket.connect(endpoint.host, endpoint.port, this.connectTimeoutMs);
                 await socket.write(buildHandshakePacket([
                     ["callerid", `${this.callerId}'`],
@@ -112,6 +129,9 @@ class TopicStateSubscriber {
             } finally {
                 if (socket) {
                     await socket.close();
+                }
+                if (this.socket === socket) {
+                    this.socket = null;
                 }
             }
         }
