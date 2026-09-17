@@ -1,4 +1,5 @@
 const capabilities = require("./capabilities");
+const EcovacsAlertStatusResolver = require("./EcovacsAlertStatusResolver");
 const EcovacsLifespanService = require("./ros/services/EcovacsLifespanService");
 const EcovacsMapService = require("./ros/services/EcovacsMapService");
 const EcovacsPositionService = require("./ros/services/EcovacsPositionService");
@@ -14,6 +15,7 @@ const EcovacsTraceService = require("./ros/services/EcovacsTraceService");
 const EcovacsVirtualWallService = require("./ros/services/EcovacsVirtualWallService");
 const EcovacsWorkManageService = require("./ros/services/EcovacsWorkManageService");
 const entities = require("../../entities");
+const ErrorStateValetudoEvent = require("../../valetudo_events/events/ErrorStateValetudoEvent");
 const fs = require("fs");
 const Logger = require("../../Logger");
 const mapEntities = require("../../entities/map");
@@ -22,12 +24,10 @@ const QuirksCapability = require("../../core/capabilities/QuirksCapability");
 const RosMasterXmlRpcClient = require("./ros/core/RosMasterXmlRpcClient");
 const ValetudoRobot = require("../../core/ValetudoRobot");
 const {
-    determineRobotStatus,
     fanLevelToPresetValue,
     statusToDockStatus,
     waterLevelToPresetValue,
 } = require("./EcovacsStateMapping");
-const {alertTypeName, findMostSevereErrorAlert, mapAlertToRobotError} = require("./EcovacsAlertMapping");
 const {buildMap, rebuildEntitiesOnlyMap} = require("./map/EcovacsMapBuilder");
 const {clampInt} = require("./map/EcovacsMapTransforms");
 const {decodeCompressedMapResponse} = require("./map/EcovacsCompressedMapDecoder");
@@ -107,6 +107,7 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
         this.lifespanService = new EcovacsLifespanService(rosOptions);
         this.statisticsService = new EcovacsStatisticsService(rosOptions);
         this.runtimeStateService = new EcovacsRuntimeStateService(rosOptions);
+        this.alertStatusResolver = new EcovacsAlertStatusResolver();
         this.mdsctlClient = new MdsctlClient({
             binaryPath: implementationSpecificConfig.mdsctlBinaryPath,
             socketPath: implementationSpecificConfig.mdsctlSocketPath,
@@ -535,42 +536,45 @@ class EcovacsT8AiviValetudoRobot extends ValetudoRobot {
             }
 
             const triggeredAlerts = this.runtimeStateService.getTriggeredAlerts();
-            const errorAlert = triggeredAlerts && triggeredAlerts.length > 0 ?
-                findMostSevereErrorAlert(triggeredAlerts) :
-                null;
+
+            const resolved = this.alertStatusResolver.resolve({
+                triggeredAlerts: triggeredAlerts,
+                workState: workState,
+                chargeState: chargeState
+            });
+
+            if (resolved.logEntries.length > 0) {
+                const alertTableAgeMs = this.runtimeStateService.getTriggeredAlertsAge();
+                for (const entry of resolved.logEntries) {
+                    Logger[entry.level](`Ecovacs: ${entry.message} (alertTableAge=${alertTableAgeMs}ms)`);
+                }
+            }
+
+            for (const eventMessage of resolved.eventMessages) {
+                this.valetudoEventStore.raise(new ErrorStateValetudoEvent({message: eventMessage}));
+            }
 
             const previousStatus = this.state.getFirstMatchingAttributeByConstructor(stateAttrs.StatusStateAttribute);
             const previousStatusValue = previousStatus?.value;
-            let statusValue;
+            const statusValue = resolved.statusValue;
 
-            if (errorAlert) {
-                statusValue = stateAttrs.StatusStateAttribute.VALUE.ERROR;
-                if (previousStatusValue !== statusValue || previousStatus?.error?.vendorErrorCode !== String(errorAlert.type)) {
-                    Logger.debug(
-                        `Ecovacs alert error: type=${errorAlert.type} (${alertTypeName(errorAlert.type)})` +
-                        ` (workState=${JSON.stringify(workState ?? null)}, chargeState=${JSON.stringify(chargeState ?? null)})`
-                    );
-                    stateChanged = true;
-                }
-                this.state.upsertFirstMatchingAttribute(new stateAttrs.StatusStateAttribute({
-                    value: statusValue,
-                    flag: stateAttrs.StatusStateAttribute.FLAG.NONE,
-                    error: mapAlertToRobotError(errorAlert.type)
-                }));
-            } else {
-                statusValue = determineRobotStatus(workState, chargeState);
-                if (previousStatusValue !== statusValue) {
-                    Logger.debug(
-                        `Ecovacs runtime status transition: ${previousStatusValue ?? "unknown"} -> ${statusValue}` +
-                        ` (workState=${JSON.stringify(workState ?? null)}, chargeState=${JSON.stringify(chargeState ?? null)})`
-                    );
-                    stateChanged = true;
-                }
-                this.state.upsertFirstMatchingAttribute(new stateAttrs.StatusStateAttribute({
-                    value: statusValue,
-                    flag: stateAttrs.StatusStateAttribute.FLAG.NONE
-                }));
+            if (
+                previousStatusValue !== statusValue ||
+                previousStatus?.flag !== resolved.statusFlag ||
+                previousStatus?.error?.vendorErrorCode !== resolved.error?.vendorErrorCode
+            ) {
+                Logger.debug(
+                    `Ecovacs runtime status transition: ${previousStatusValue ?? "unknown"} -> ${statusValue}` +
+                    ` (workState=${JSON.stringify(workState ?? null)}, chargeState=${JSON.stringify(chargeState ?? null)})`
+                );
+                stateChanged = true;
             }
+
+            this.state.upsertFirstMatchingAttribute(new stateAttrs.StatusStateAttribute({
+                value: statusValue,
+                flag: resolved.statusFlag,
+                error: resolved.error
+            }));
             this.state.upsertFirstMatchingAttribute(new stateAttrs.DockStatusStateAttribute({
                 value: statusToDockStatus(statusValue)
             }));
