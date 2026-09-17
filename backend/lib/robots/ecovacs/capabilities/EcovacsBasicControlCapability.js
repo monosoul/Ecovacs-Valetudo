@@ -1,5 +1,6 @@
 const BasicControlCapability = require("../../../core/capabilities/BasicControlCapability");
 const entities = require("../../../entities");
+const {WORK_STATE} = require("../EcovacsStateMapping");
 
 const stateAttrs = entities.state.attributes;
 
@@ -8,8 +9,13 @@ const stateAttrs = entities.state.attributes;
  */
 class EcovacsBasicControlCapability extends BasicControlCapability {
     async start() {
-        const currentStatus = this.robot.state.getFirstMatchingAttributeByConstructor(stateAttrs.StatusStateAttribute);
-        if (currentStatus?.value === stateAttrs.StatusStateAttribute.VALUE.PAUSED) {
+        // Resume-vs-fresh-start must be decided from the robot's own workState rather
+        // than Valetudo's StatusStateAttribute: an alert (e.g. the robot got stuck)
+        // can put Valetudo into ERROR while the firmware still considers the job
+        // paused and resumable. Falling through to startAutoClean() in that case
+        // would discard an in-progress segment/zone job instead of continuing it.
+        const workState = this.robot.runtimeStateService.getRuntimeState()?.workState;
+        if (workState?.state === WORK_STATE.PAUSED) {
             await this.robot.workManageService.resumeCleaning(this.robot.currentWorkType);
         } else {
             await this.robot.workManageService.startAutoClean();

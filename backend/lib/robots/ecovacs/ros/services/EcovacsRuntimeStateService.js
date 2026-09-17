@@ -110,6 +110,17 @@ class EcovacsRuntimeStateService {
     getTriggeredAlerts(staleMs) {
         return this.alertSubscriber.getLatestValue(staleMs);
     }
+
+    /**
+     * Age of the latest received /alert/Alerts table, regardless of staleness.
+     * Used to diagnose whether the topic is being actively republished or is
+     * latched on an old value (e.g. publish-on-change semantics).
+     *
+     * @returns {number|null} age in milliseconds, or null if no alert table has been received yet
+     */
+    getTriggeredAlertsAge() {
+        return this.alertSubscriber.getLatestValueAge();
+    }
 }
 
 module.exports = EcovacsRuntimeStateService;

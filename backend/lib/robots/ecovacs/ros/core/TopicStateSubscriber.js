@@ -88,6 +88,21 @@ class TopicStateSubscriber {
         return this.latestValue;
     }
 
+    /**
+     * Age of the latest received value, regardless of staleness thresholds.
+     * Used to diagnose whether a topic is actively being republished or is
+     * latched on an old value (e.g. a topic that only publishes on change).
+     *
+     * @returns {number|null} age in milliseconds, or null if no value has been received yet
+     */
+    getLatestValueAge() {
+        if (this.latestValue === null) {
+            return null;
+        }
+
+        return Date.now() - this.latestAt;
+    }
+
     async runLoop() {
         while (this.running) {
             let socket = null;
