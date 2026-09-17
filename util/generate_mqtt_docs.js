@@ -709,8 +709,7 @@ class FakeMqttController extends MqttController {
                 }
             },
             "customizations": {
-                "topicPrefix": "<TOPIC PREFIX>",
-                "provideMapData": true
+                "topicPrefix": "<TOPIC PREFIX>"
             },
             "stateTopic": "<TOPIC PREFIX>/<IDENTIFIER>/$state"
         }

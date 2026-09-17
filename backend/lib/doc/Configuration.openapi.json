@@ -224,10 +224,6 @@
               "topicPrefix": {
                 "type": "string",
                 "description": "You can override the default \"valetudo\" mqtt topic prefix if you e.g. prefer to group all your mqtt stuff by rooms/floors/protocols"
-              },
-              "provideMapData": {
-                "type": "boolean",
-                "description": "If for some reason you're not interested in receiving map data via MQTT, you can disable that here."
               }
             }
           },

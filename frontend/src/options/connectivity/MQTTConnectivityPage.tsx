@@ -764,12 +764,6 @@ const MQTTConnectivity = (): React.ReactElement => {
                             /<wbr/>BatteryStateAttribute/<wbr/>level
                     </span>
                 </Typography>
-                <MQTTSwitch
-                    mqttConfiguration={mqttConfiguration}
-                    modifyMQTTConfig={modifyMQTTConfig}
-                    title="Provide map data"
-                    configPath={["customizations", "provideMapData"]}
-                />
             </GroupBox>
 
             {

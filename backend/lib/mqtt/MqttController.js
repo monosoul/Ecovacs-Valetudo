@@ -604,7 +604,7 @@ class MqttController {
     }
 
     onMapUpdated() {
-        if (this.currentConfig.enabled && this.isInitialized && this.robotHandle !== null && (this.currentConfig.customizations.provideMapData ?? true)) {
+        if (this.currentConfig.enabled && this.isInitialized && this.robotHandle !== null) {
             const mapHandle = this.robotHandle.getMapHandle();
 
             if (mapHandle !== null) {
@@ -974,7 +974,6 @@ module.exports = MqttController;
  *
  * @property {object} customizations
  * @property {string} customizations.topicPrefix
- * @property {boolean} customizations.provideMapData
  *
  * @property {object} interfaces
  *

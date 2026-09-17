@@ -297,6 +297,7 @@ I will send you pictures of sad kittens. You have been warned.
 ### Phase 1: Recon
 
 As described in the high-level overview, we start by doing some reconnaissance on the robot.
+To do that, it needs to be turned off first.
 
 #### Get the config value
 

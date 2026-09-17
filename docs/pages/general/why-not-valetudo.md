@@ -310,7 +310,62 @@ that could be utilized to provide support.
 It is possible to use Valetudo on unsupported robots or in unsupported ways.
 Just note that there will be no support for these unsupported scenarios.
 
-## Valetudo is only available in english
+## Valetudo is only available in English
+
+Valetudo, fundamentally, is a curated experience.
+It's occupying a very weird space for that, given that it's vacuum cleaners, but it does so nonetheless.
+
+In layman's terms, that means that it does what either I would use myself, or where I can empathize with my users' needs,
+see why they would want to do something, and thus care about them being able to do so.
+
+I like to use my tech in English, and I don't think it's sensible to want a "translated" experience.
+
+### But why do I think that?
+
+The reason why we even have this distinction between i18n (internationalization) and l10n (translation) is 
+that mere translation of a curated experience does not result in a curated experience but in a different language.
+Instead, you get a muddy mess, where you often have to mentally translate the text back into its original language just to understand what it wants from you.<br/>
+That is - objectively - not a good experience.
+
+To have a good experience, you need i18n. However, I only speak German and English, so - at most - I could create curated experiences in these two languages.<br/>
+Of course, hypothetically, someone else could try to do i18n, but not only does that "someone else" not exist, but also,
+"someone else" is not me, leading to a different curated experience.
+
+This may not be important to you, as you might not be looking for a curated experience, but for a commodity that gets the job done.
+Which is an understandable need that I - the author - too often share in my life.
+
+It is however important to me, because creation of something not bound by the mediocrity of compromise is what drives me to keep doing these things.
+Hence, also, why this is FOSS and doesn't come with a paid license.
+
+### Commodities?
+
+Yes, commodities.<br/>
+Commodities are something meant to be consumed, meaning the whole economic model behind them works quite differently.
+
+The people making them are not really the people steering them, nor are they self-expressing through working the assembly line.<br/>
+And that is fine, because for that, they are being compensated monetarily.<br/>
+It is a simple economic exchange of labor for money.
+
+I however have no intent of adopting an economic model that works like that for this project.<br/>
+I do not want to ask you to pay for a license and all that crap. <br/>
+And I certainly do not want to turn a hobby into something that makes money, just so that I have to go and find a new hobby.
+
+I want to just craft curated experiences.<br/>
+You probably also want me (and others!) to want and do that, as it adds color and flavor to an otherwise bland gray world.
+
+And yes, of course, Valetudo is not the best example for that. It's software for vacuum cleaners.<br/>
+But you should get the point.
+
+<br/>
+
+Previously, this section focused more on the logistical nightmare of the idea of localization.
+And, while that layer remains completely true, this purely logistical approach kinda misses the underlying philosophical point.
+
+Therefore, in 2026, it has been rewritten to what you're reading right now.
+What follows below is said previous version that is still as relevant as before - but now you have further context.
+
+____
+
 
 Valetudo does not feature any localization. Let me explain the reasoning behind this with a few examples.
 

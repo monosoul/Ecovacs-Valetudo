@@ -50,8 +50,7 @@
             }
         },
         "customizations": {
-            "topicPrefix": "",
-            "provideMapData": true
+            "topicPrefix": ""
         },
         "optionalExposedCapabilities": []
     },

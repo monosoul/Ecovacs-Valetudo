@@ -6,23 +6,46 @@ order: 13
 
 # Firmware Updates
 
-By rooting your robot, you will lose the ability to install firmware updates directly from the vendor via OTA.
-This is intentional as those would un-root your robot.
-To update your robots' firmware, you will need to install a rooted version of that firmware.
+A rooted robot will no longer do OTA firmware updates through the vendor's cloud infrastructure.
+That means that whatever rooted firmware you install during rooting will always be exactly that one.
 
-Do note that just because a new firmware version is out, this does not mean that you'll be able to instantly install and use it.
-With every new firmware, we need to figure out how to root and patch it to work offline.
+So you won't suddenly wake up with an enshittified robot, but you also don't suddenly receive bugfixes or improvements while you sleep.
 
-Usually, some software updates break out patching, and thus we have to rework it.
-Occasionally, the vendor might even introduce new countermeasures against us.
-While unlikely, it might happen that a new firmware version turns out to not be rootable at all. Do keep that in mind.
+Historically speaking, at the time of writing (2026-08-23), new firmwares on supported bots only ever made those better, so you may want to actually update from time to time.
+Valetudo also targets the latest firmware version available in the dustbuilder, so if something does not work, make sure you're on that.
+
+That said, it might also happen that newer firmwares aren't rootable, so don't take any reddit screenshots of vendor apps as a source of truth on what is latest. Latest supported can always exclusively be found on <a href="https://builder.dontvacuum.me" rel="noopener" target="_blank">the dustbuilder</a> and may not match "latest on vendor app".
+
+## How to update
+
+Updating is pretty straightforward though and just more of the same.
+Since rooting means installing a full rooted firmware image, updating the firmware just means installing another full rooted firmware image (but based on a newer firmware).
+
+It is not required to go through the whole initial rooting procedure again, as a rooted firmware grants you root on the machine.
+All you thus need is shell access via SSH or UART/ADB (depending on the bot).
+
+Using that access, you build a new firmware using the "for manual installation using SSH" option of <a href="https://builder.dontvacuum.me" rel="noopener" target="_blank">the dustbuilder</a>, download it to the right location on the robot, then do the right thing to install it.
+
+Said right location and right thing can usually be deduced from the initial rooting instructions, and will probably be something like "run the bundled install script".
+
+If not, a `/tmp` with sufficient free space is probably a good guess for the former - as it is usually a `tmpfs`. If that does not exist, a large writable partition - usually `/data`, `/mnt/data` or `/userdata` - is the next best option - and will require a cleanup once you're done.
+
+The right script to run will likely be the least specifically named bundled one with a name along the lines of `install.sh` - unless there is exceptionally strong reason to believe otherwise.
 
 
-To update your robots' firmware, simply head over to <a href="https://builder.dontvacuum.me" rel="noopener" target="_blank">the dustbuilder</a> and build a new
-rooted firmware image with the version you want to install. Make sure to select the "Build for manual installation" option.
+Just as with the rooting instructions, flashing a new image is a potentially dangerous process, so I need you - lucidly - in the driver seat there, as I am not going to take responsibility for you.
+Therefore - and for maintenance reasons - the individual per-bot instructions cannot be duplicated here.
 
-With the image built, SSH into your robot, download the tar file, extract it and install the firmware with the installation script provided inside the tar file.
-The process is basically the same as the one done during the initial root. Make sure that the robot is docked during that procedure.
+That said, there shouldn't be any obvious footguns. Or so I hope.
 
-If your robot has multiple system partitions like most of them do, you can run that install procedure twice for good measure.
+### Misc notes
+
+Don't forget that the robot needs to be docked and charging during the install.
+
+If your robot has multiple system partitions in an A/B configuration like most of them do, you can run that install procedure twice for good measure.
 It is however not required to do that.
+
+And, as always, peer support is usually available, so a "hey man this is confusing me. which script should I pick? I thought X, but maybe it's Y because reason Z?" is a perfectly fine question to ask - which might even lead to the docs being improved.
+
+"Hello I am new I do not know linux I was gifted this bot. Someone tell me how to do updates" otoh.. not so much.
+Don't be that guy.

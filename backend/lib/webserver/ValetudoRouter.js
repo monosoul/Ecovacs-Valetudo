@@ -293,8 +293,7 @@ class ValetudoRouter {
                 identifier: obj.identity.identifier
             },
             customizations: {
-                topicPrefix: obj.customizations.topicPrefix,
-                provideMapData: obj.customizations.provideMapData
+                topicPrefix: obj.customizations.topicPrefix
             },
             interfaces: {
                 homie: {
